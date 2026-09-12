@@ -1,2 +1,9 @@
-# 单元测试（Qt Test）将在 M2（数据层）与 M4（排课引擎）里程碑中添加。
-# 届时在此目录为每个被测库创建 tst_*.cpp 并用 qt_add_test 注册。
+# 单元测试（Qt Test），由顶层在 BUILD_TESTING 时引入，注册进 CTest。
+
+add_executable(tst_model tst_model.cpp)
+target_link_libraries(tst_model PRIVATE sched_core Qt6::Test)
+add_test(NAME tst_model COMMAND tst_model)
+
+add_executable(tst_store tst_store.cpp)
+target_link_libraries(tst_store PRIVATE sched_core sched_data Qt6::Sql Qt6::Test)
+add_test(NAME tst_store COMMAND tst_store)
