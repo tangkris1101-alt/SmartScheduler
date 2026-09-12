@@ -7,3 +7,7 @@ add_test(NAME tst_model COMMAND tst_model)
 add_executable(tst_store tst_store.cpp)
 target_link_libraries(tst_store PRIVATE sched_core sched_data Qt6::Sql Qt6::Test)
 add_test(NAME tst_store COMMAND tst_store)
+
+add_executable(tst_engine tst_engine.cpp)
+target_link_libraries(tst_engine PRIVATE sched_core sched_engine Qt6::Test)
+add_test(NAME tst_engine COMMAND tst_engine)

@@ -22,3 +22,5 @@ target_include_directories(sched_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(sched_core PUBLIC QT_NO_KEYWORDS)
 
 target_link_libraries(sched_core PUBLIC Qt6::Core)
+
+add_subdirectory(engine)

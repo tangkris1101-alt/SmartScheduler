@@ -19,6 +19,7 @@ target_link_libraries(SmartScheduler PRIVATE
     Qt6::PrintSupport
     sched_core
     sched_data
+    sched_engine
 )
 
 set_target_properties(SmartScheduler PROPERTIES
