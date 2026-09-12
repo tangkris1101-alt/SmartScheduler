@@ -11,7 +11,10 @@ ApplicationWindow {
     height: 780
     minimumWidth: 1024
     minimumHeight: 680
-    title: qsTr("智排课系统 SmartScheduler")
+    // 标题栏：项目名 + 未保存星号
+    title: (app.projectDirty ? "* " : "")
+           + (app.hasProject ? app.schoolName + " — " : "")
+           + qsTr("智排课系统 SmartScheduler")
     color: Theme.background
 
     property int currentPage: 0
@@ -77,6 +80,17 @@ ApplicationWindow {
             }
         }
         onThirdAction: Qt.quit()
+    }
+
+    // 首次启动显示新手引导
+    Component.onCompleted: {
+        if (!app.onboardingShown())
+            onboardingDialog.open()
+    }
+
+    OnboardingDialog {
+        id: onboardingDialog
+        parent: Overlay.overlay
     }
 
     // 全局撤销/重做快捷键

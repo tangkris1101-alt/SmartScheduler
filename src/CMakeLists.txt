@@ -34,6 +34,7 @@ qt_add_qml_module(SmartScheduler
         ui/TimetablePage.qml
         ui/PrintPage.qml
         ui/ImportExcelDialog.qml
+        ui/OnboardingDialog.qml
 )
 
 target_link_libraries(SmartScheduler PRIVATE

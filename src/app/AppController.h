@@ -120,6 +120,13 @@ public:
     Q_INVOKABLE void excelImportCancel();
     bool importPending() const { return m_importPending; }
 
+    // ---- 示例学校与新手引导 ----
+    // 一键生成示例中学（6 班/11 课/14 师，含合班/连课/单双周/不排/预排/教室容量），
+    // autoSchedule=true 时自动跑 2 轮引擎并直接应用结果
+    Q_INVOKABLE void createSampleSchool(bool autoSchedule = true);
+    Q_INVOKABLE bool onboardingShown() const;
+    Q_INVOKABLE void setOnboardingShown(bool shown);
+
     // ---- 打印设置（随项目持久化）----
     QVariantMap printSettings() const { return m_printSettings; }
     void setPrintSettings(const QVariantMap &settings);
@@ -155,6 +162,7 @@ private:
     QVariantMap m_importReport;
     bool m_importPending = false;
     QVariantMap m_printSettings;
+    bool m_sampleAutoApply = false; // 示例学校生成后自动应用排课结果
 
     // 自动排课状态
     sched::SchedulerEngine *m_engine = nullptr;

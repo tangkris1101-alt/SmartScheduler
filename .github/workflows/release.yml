@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-release:
+    name: Windows 发布构建
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.1'
+          arch: win64_mingw
+          cache: 'true'
+
+      - name: Configure & Build
+        run: |
+          cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Deploy (windeployqt)
+        shell: cmd
+        run: |
+          mkdir deploy
+          copy build\SmartScheduler.exe deploy\
+          windeployqt --release --compiler-runtime --qmldir src\ui deploy\SmartScheduler.exe
+
+      - name: Zip portable
+        shell: pwsh
+        run: |
+          $ver = "${env:GITHUB_REF_NAME}".TrimStart('v')
+          Compress-Archive -Path deploy\* -DestinationPath "SmartScheduler-$ver-win64-portable.zip" -CompressionLevel Optimal
+
+      - name: Installer (Inno Setup)
+        shell: cmd
+        run: |
+          where iscc >nul 2>nul || choco install innosetup -y --no-progress
+          where iscc >nul 2>nul && iscc installer\SmartScheduler.iss || "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\SmartScheduler.iss
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ver = "${env:GITHUB_REF_NAME}"
+          $zip = "SmartScheduler-$($ver.TrimStart('v'))-win64-portable.zip"
+          $setup = Get-ChildItem installer\Output\*.exe | Select-Object -First 1
+          $files = @($zip)
+          if ($setup) { $files += $setup.FullName }
+          gh release create $ver $files --title "智排课系统 $ver" --generate-notes

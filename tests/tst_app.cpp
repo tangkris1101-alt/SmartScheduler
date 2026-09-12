@@ -38,6 +38,7 @@ private Q_SLOTS:
     void unplacedAndClear();
     void temporaryModeOps();
     void printExport();
+    void sampleSchool();
 };
 
 void TestApp::projectLifecycle()
@@ -864,6 +865,41 @@ void TestApp::printExport()
     QCOMPARE(app.printSettings().value(QStringLiteral("headerNote")).toString(),
              QStringLiteral("2025 春季学期"));
     app.closeProject();
+}
+
+void TestApp::sampleSchool()
+{
+    AppController app;
+    app.createSampleSchool(false); // 先不排课，验证数据结构
+    auto *s = app.school();
+    QVERIFY(app.hasProject());
+    QVERIFY(app.projectDirty());
+    QCOMPARE(s->classes.size(), 6);
+    QVERIFY(s->courses.size() >= 10);
+    QVERIFY(s->teachers.size() >= 10);
+    QVERIFY(s->classrooms.size() >= 3);
+    QCOMPARE(s->combinedGroups.size(), 3);          // 体育两两合班
+    QCOMPARE(s->noScheduleConstraints.size(), 2);   // 体育老师 + 信息课
+    QCOMPARE(s->preAssignments.size(), 1);          // 1班体育预排
+    // 含连课与单双周
+    bool hasChain = false, hasHalf = false;
+    for (const auto &e : s->planEntries) {
+        if (e.chainedCount > 0) hasChain = true;
+        if (e.weeklyPeriods - int(e.weeklyPeriods) > 0.25) hasHalf = true;
+    }
+    QVERIFY(hasChain && hasHalf);
+
+    // 自动排课：引擎完成后自动应用，硬违例为 0
+    QSignalSpy spy(&app, &AppController::schedulerFinished);
+    app.createSampleSchool(true);
+    QVERIFY(app.schedulerRunning());
+    QVERIFY2(spy.wait(60000), "示例学校排课未在 60s 内完成");
+    QVERIFY(!app.resultPending()); // 已自动应用
+    QVERIFY(app.hasSchedule());
+    QCOMPARE(app.schedulerReport().value(QStringLiteral("hardViolations")).toInt(), 0);
+    // 预排未被移动
+    QCOMPARE(s->schedule.courseAt(s->classes.first().id, 4 * 7, 0).value_or(-1),
+             s->courses[9].id); // 体育
 }
 
 // QPdfWriter/QFontDatabase 需要 QGuiApplication；headless 用 minimal 平台

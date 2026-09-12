@@ -380,6 +380,10 @@ void AppController::runScheduler(const QVariantMap &options)
                 Q_EMIT schedulerRunningChanged();
                 Q_EMIT resultPendingChanged();
                 Q_EMIT schedulerFinished();
+                if (m_sampleAutoApply) {
+                    m_sampleAutoApply = false;
+                    applyResult(); // 示例学校：直接应用，用户立即看到课表
+                }
             });
 
     m_schedulerRunning = true;
@@ -734,4 +738,188 @@ void AppController::setPrintSettings(const QVariantMap &settings)
     m_printSettings = settings;
     markDirty(); // 设置随项目保存，也算未保存改动
     Q_EMIT printSettingsChanged();
+}
+
+// ==================== 示例学校与新手引导 ====================
+
+void AppController::createSampleSchool(bool autoSchedule)
+{
+    cancelScheduler();
+    m_store.close();
+    sched::School s;
+    s.name = QStringLiteral("示例实验中学");
+    s.timeConfig.daysPerWeek = 5;
+    s.timeConfig.periodsPerDay = 7;
+    s.timeConfig.morningPeriods = 4;
+    s.timeConfig.weeksPerTerm = 20;
+
+    // 年级组 + 6 个班
+    sched::Group grade;
+    grade.type = sched::Group::Type::Grade;
+    grade.name = QStringLiteral("高一年级");
+    const qint64 gradeId = s.addGroup(grade);
+    QVector<qint64> classIds;
+    for (int i = 1; i <= 6; ++i) {
+        sched::ClassInfo c;
+        c.name = QStringLiteral("高一%1班").arg(i);
+        c.gradeId = gradeId;
+        classIds.append(s.addClass(c));
+        s.findGroup(gradeId)->memberIds.append(classIds.last());
+    }
+
+    // 课程（11 门，含主课/理科/平均分布/上下午）
+    auto addCourse = [&](const QString &name, bool major, bool science,
+                         sched::AmPmPolicy ampm = sched::AmPmPolicy::Auto, bool spread = false) {
+        sched::Course c;
+        c.name = name;
+        c.isMajor = major;
+        c.isScience = science;
+        c.amPmPolicy = ampm;
+        c.evenSpread = spread;
+        return s.addCourse(c);
+    };
+    const qint64 yuwen = addCourse(QStringLiteral("语文"), true, false, sched::AmPmPolicy::Morning);
+    const qint64 shuxue = addCourse(QStringLiteral("数学"), true, true, sched::AmPmPolicy::Morning);
+    const qint64 yingyu = addCourse(QStringLiteral("英语"), true, false, sched::AmPmPolicy::Morning);
+    const qint64 wuli = addCourse(QStringLiteral("物理"), true, true);
+    const qint64 huaxue = addCourse(QStringLiteral("化学"), false, true);
+    const qint64 shengwu = addCourse(QStringLiteral("生物"), false, true);
+    const qint64 lishi = addCourse(QStringLiteral("历史"), false, false);
+    const qint64 dili = addCourse(QStringLiteral("地理"), false, false);
+    const qint64 zhengzhi = addCourse(QStringLiteral("政治"), false, false);
+    const qint64 tiyu = addCourse(QStringLiteral("体育"), false, false, sched::AmPmPolicy::Afternoon);
+    const qint64 xinxi = addCourse(QStringLiteral("信息"), false, true, sched::AmPmPolicy::Auto, true);
+    const qint64 shengya = addCourse(QStringLiteral("生涯规划"), false, false);
+
+    // 老师（14 位）
+    auto addTeacher = [&](const QString &name, int maxPerDay = -1) {
+        sched::Teacher t;
+        t.name = name;
+        t.maxPeriodsPerDay = maxPerDay;
+        return s.addTeacher(t);
+    };
+    const qint64 tWangFang = addTeacher(QStringLiteral("王芳"));
+    const qint64 tLiJing = addTeacher(QStringLiteral("李静"));
+    const qint64 tZhangMin = addTeacher(QStringLiteral("张敏"));
+    const qint64 tChenQiang = addTeacher(QStringLiteral("陈强"));
+    const qint64 tLiuYang = addTeacher(QStringLiteral("刘洋"));
+    const qint64 tYangLiu = addTeacher(QStringLiteral("杨柳"));
+    const qint64 tZhaoLei = addTeacher(QStringLiteral("赵磊"));
+    const qint64 tZhouJie = addTeacher(QStringLiteral("周杰"));
+    const qint64 tWuXia = addTeacher(QStringLiteral("吴霞"));
+    const qint64 tZhengShuang = addTeacher(QStringLiteral("郑爽"));
+    const qint64 tFengGuo = addTeacher(QStringLiteral("冯国"));
+    const qint64 tChuHong = addTeacher(QStringLiteral("褚红"));
+    const qint64 tWeiMin = addTeacher(QStringLiteral("卫民"));
+    const qint64 tHeBing = addTeacher(QStringLiteral("何冰"), 4);
+    const qint64 tZhengTao = addTeacher(QStringLiteral("郑涛"));
+
+    // 公共教室
+    auto addRoom = [&](const QString &name, int cap) {
+        sched::Classroom r;
+        r.name = name;
+        r.capacity = cap;
+        return s.addClassroom(r);
+    };
+    const qint64 playground = addRoom(QStringLiteral("操场"), 6);
+    const qint64 computerRoom = addRoom(QStringLiteral("计算机房"), 3);
+    const qint64 physicsLab = addRoom(QStringLiteral("物理实验室"), 2);
+
+    // 教研组
+    sched::Group ywGroup;
+    ywGroup.type = sched::Group::Type::CourseGroup;
+    ywGroup.name = QStringLiteral("语文教研组");
+    const qint64 ywGid = s.addGroup(ywGroup);
+    s.findGroup(ywGid)->memberIds.append(yuwen);
+
+    // 教学计划：每班一套
+    auto plan = [&](qint64 cls, qint64 course, QVector<qint64> teachers, double periods,
+                    int chained = 0, int chainLen = 2, qint64 room = -1, bool combined = false,
+                    int pg = -1) {
+        sched::PlanEntry e;
+        e.classId = cls;
+        e.courseId = course;
+        e.teacherIds = teachers;
+        e.weeklyPeriods = periods;
+        e.chainedCount = chained;
+        e.chainLength = chainLen;
+        e.classroomId = room;
+        e.isCombined = combined;
+        e.progressGroup = pg;
+        s.addPlanEntry(e);
+    };
+    const QVector<qint64> ywTeachers = {tWangFang, tWangFang, tLiJing, tLiJing, tZhangMin, tZhangMin};
+    const QVector<qint64> sxTeachers = {tChenQiang, tChenQiang, tChenQiang, tLiuYang, tLiuYang, tLiuYang};
+    const QVector<qint64> yyTeachers = {tYangLiu, tYangLiu, tYangLiu, tZhaoLei, tZhaoLei, tZhaoLei};
+    for (int i = 0; i < 6; ++i) {
+        const qint64 cls = classIds[i];
+        plan(cls, yuwen, {ywTeachers[i]}, 5, 1, 2, -1, false, 1); // 语文进度组1
+        plan(cls, shuxue, {sxTeachers[i]}, 5, 1, 2, -1, false, 1);
+        plan(cls, yingyu, {yyTeachers[i]}, 4);
+        plan(cls, wuli, {tZhouJie}, 3, 0, 2, physicsLab);
+        plan(cls, huaxue, {tWuXia}, 3);
+        plan(cls, shengwu, {tZhengShuang}, 2);
+        plan(cls, lishi, {tFengGuo}, 2);
+        plan(cls, dili, {tChuHong}, 2);
+        plan(cls, zhengzhi, {tWeiMin}, 2);
+        plan(cls, tiyu, {tHeBing}, 2, 0, 2, playground, true); // 体育合班
+        plan(cls, xinxi, {tZhengTao}, 2, 0, 2, computerRoom);
+        plan(cls, shengya, {tZhengTao}, 0.5); // 单双周
+    }
+
+    // 合班组：体育两两合班
+    for (int i = 0; i < 6; i += 2) {
+        sched::CombinedGroup cg;
+        cg.name = QStringLiteral("体育合班 %1-%2").arg(i + 1).arg(i + 2);
+        cg.entries = {{classIds[i], tiyu}, {classIds[i + 1], tiyu}};
+        s.addCombinedGroup(cg);
+    }
+
+    // 不排时间：体育老师周五下午；信息课周一上午（机房维护）
+    sched::NoScheduleConstraint ns1;
+    ns1.entityType = sched::NoScheduleConstraint::EntityType::Teacher;
+    ns1.entityId = tHeBing;
+    ns1.slots = {4 * 7 + 5, 4 * 7 + 6}; // 周五第 6-7 节
+    s.addNoScheduleConstraint(ns1);
+    sched::NoScheduleConstraint ns2;
+    ns2.entityType = sched::NoScheduleConstraint::EntityType::Course;
+    ns2.entityId = xinxi;
+    ns2.slots = {0, 1}; // 周一第 1-2 节
+    s.addNoScheduleConstraint(ns2);
+
+    // 固定预排：高一1班体育 周五第1节
+    sched::PreAssignment pre;
+    pre.classId = classIds[0];
+    pre.courseId = tiyu;
+    pre.slotIndex = 4 * 7; // 周五第1节
+    s.addPreAssignment(pre);
+
+    m_school = s;
+    m_currentPath.clear();
+    m_hasProject = true;
+    m_dirty = true;
+    m_resultPending = false;
+    Q_EMIT projectChanged();
+    Q_EMIT projectDirtyChanged();
+    Q_EMIT statsChanged();
+    Q_EMIT scheduleChanged();
+    Q_EMIT resultPendingChanged();
+
+    if (autoSchedule) {
+        m_sampleAutoApply = true;
+        runScheduler({{QStringLiteral("runs"), 2},
+                      {QStringLiteral("maxIterations"), 20000},
+                      {QStringLiteral("randomSeed"), true},
+                      {QStringLiteral("placeAll"), true}});
+    }
+}
+
+bool AppController::onboardingShown() const
+{
+    return QSettings().value(QStringLiteral("ui/onboardingShown"), false).toBool();
+}
+
+void AppController::setOnboardingShown(bool shown)
+{
+    QSettings().setValue(QStringLiteral("ui/onboardingShown"), shown);
 }

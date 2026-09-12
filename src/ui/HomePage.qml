@@ -72,10 +72,51 @@ Flickable {
                         onClicked: app.openProject(app.recentFiles[0])
                     }
                     AppButton {
-                        text: qsTr("📥 Excel 导入")
+                        text: qsTr("❓ 新手引导")
                         variant: "subtle"
-                        enabled: app.hasProject
-                        onClicked: homeImportDialog.open()
+                        onClicked: {
+                            onboardingPageDialog.page = 0
+                            onboardingPageDialog.open()
+                        }
+                    }
+                }
+
+                // 空项目快速上手引导
+                Rectangle {
+                    Layout.topMargin: Theme.spacingM
+                    Layout.fillWidth: true
+                    height: quickRow.implicitHeight + Theme.spacingM * 2
+                    radius: Theme.radiusM
+                    visible: !app.hasProject
+                    color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.08)
+                    border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.35)
+
+                    RowLayout {
+                        id: quickRow
+                        anchors.fill: parent
+                        anchors.margins: Theme.spacingM
+                        spacing: Theme.spacingM
+                        Text {
+                            text: "🚀"
+                            font.pixelSize: Theme.fontTitle
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("3 分钟上手：创建示例学校立即体验完整流程，或下载 Excel 模板批量导入你的数据")
+                            color: Theme.text
+                            font.pixelSize: Theme.fontBody
+                            wrapMode: Text.WordWrap
+                        }
+                        AppButton {
+                            text: qsTr("🎓 创建示例学校")
+                            variant: "primary"
+                            onClicked: app.createSampleSchool(true)
+                        }
+                        AppButton {
+                            text: qsTr("📥 Excel 导入")
+                            enabled: app.hasProject
+                            onClicked: homeImportDialog.open()
+                        }
                     }
                 }
             }
@@ -201,6 +242,11 @@ Flickable {
 
     ImportExcelDialog {
         id: homeImportDialog
+        parent: Overlay.overlay
+    }
+
+    OnboardingDialog {
+        id: onboardingPageDialog
         parent: Overlay.overlay
     }
 }
