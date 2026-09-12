@@ -24,13 +24,18 @@
 
 ## 构建
 
-```bash
-# 前提：Qt 6.8+ (mingw_64)、CMake、Ninja 已在 PATH（或使用 Qt 安装目录下的环境）
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
-  -DCMAKE_PREFIX_PATH=C:/Qt/6.8.1/mingw_64
+> ⚠️ Qt 的 MinGW 工具链（qmlimportscanner / qmlcachegen）**不支持非 ASCII 路径**。
+> 请保证项目完整路径全为英文。本机位置：`C:\Users\Administrator\Desktop\SmartScheduler`
+
+```bat
+:: 1. 注入本机工具链环境（C:\Qt，由 aqtinstall 安装）
+scripts\env.bat
+
+:: 2. 配置 → 构建 → 测试 → 运行
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/Qt/6.8.1/mingw_64
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/src/SmartScheduler.exe
+build\SmartScheduler.exe
 ```
 
 ## 目录结构
