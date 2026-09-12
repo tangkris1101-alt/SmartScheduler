@@ -1,5 +1,6 @@
 #include "AppController.h"
 
+#include "ExcelIo.h"
 #include "SchedulerEngine.h"
 
 #include <QFile>
@@ -77,6 +78,11 @@ bool AppController::openProject(const QString &pathOrUrl)
     m_hasProject = true;
     m_dirty = false;
     addRecentFile(path);
+    // 打印设置随项目载入
+    const QVariant saved = m_store.setting(QStringLiteral("print"));
+    if (saved.isValid() && !saved.isNull())
+        m_printSettings = saved.toMap();
+    Q_EMIT printSettingsChanged();
     Q_EMIT projectChanged();
     Q_EMIT projectDirtyChanged();
     Q_EMIT statsChanged();
@@ -96,6 +102,8 @@ bool AppController::saveToPath(const QString &path)
         m_lastError = m_store.lastError();
         return false;
     }
+    // 打印设置随项目保存
+    m_store.setSetting(QStringLiteral("print"), m_printSettings);
     m_currentPath = path;
     addRecentFile(path);
     if (m_dirty) {
@@ -664,4 +672,66 @@ QVariantList AppController::masterGrid() const
                                 {QStringLiteral("cells"), cells}});
     }
     return rows;
+}
+
+// ==================== Excel 批量导入 ====================
+
+bool AppController::writeImportTemplate(const QString &pathOrUrl)
+{
+    QString path = toLocalPath(pathOrUrl);
+    if (!path.endsWith(QLatin1StringView(".xlsx"), Qt::CaseInsensitive))
+        path += QStringLiteral(".xlsx");
+    QString err;
+    if (!sched::ExcelImporter::writeImportTemplate(path, &err)) {
+        m_lastError = err;
+        return false;
+    }
+    return true;
+}
+
+QVariantMap AppController::excelImportPreview(const QString &pathOrUrl, bool overwrite)
+{
+    m_importStaging = m_school; // 在副本上预演，不污染当前数据
+    const sched::ImportReport rep =
+        sched::ExcelImporter::importFile(toLocalPath(pathOrUrl), &m_importStaging, overwrite);
+    m_importReport = {{QStringLiteral("created"), rep.created},
+                      {QStringLiteral("updated"), rep.updated},
+                      {QStringLiteral("skipped"), rep.skipped},
+                      {QStringLiteral("errors"), rep.errors},
+                      {QStringLiteral("fatal"), rep.fatal}};
+    m_importPending = !rep.fatal;
+    Q_EMIT importPendingChanged();
+    return m_importReport;
+}
+
+bool AppController::excelImportConfirm()
+{
+    if (!m_importPending)
+        return false;
+    m_school = m_importStaging;
+    m_importStaging = sched::School();
+    m_importPending = false;
+    markDirty();
+    Q_EMIT importPendingChanged();
+    Q_EMIT projectChanged(); // 名单/计划大面积变更，模型全量重置
+    Q_EMIT statsChanged();
+    return true;
+}
+
+void AppController::excelImportCancel()
+{
+    m_importStaging = sched::School();
+    m_importPending = false;
+    Q_EMIT importPendingChanged();
+}
+
+// ==================== 打印设置 ====================
+
+void AppController::setPrintSettings(const QVariantMap &settings)
+{
+    if (m_printSettings == settings)
+        return;
+    m_printSettings = settings;
+    markDirty(); // 设置随项目保存，也算未保存改动
+    Q_EMIT printSettingsChanged();
 }

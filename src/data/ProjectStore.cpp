@@ -1,6 +1,7 @@
 #include "ProjectStore.h"
 
 #include <QFile>
+#include <QJsonDocument>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
@@ -751,6 +752,32 @@ bool ProjectStore::load(School *school)
     }
 
     return true;
+}
+
+bool ProjectStore::setSetting(const QString &key, const QVariant &value)
+{
+    if (!m_db.isOpen())
+        return fail(QStringLiteral("数据库未打开"));
+    QSqlQuery q(m_db);
+    if (!q.prepare(QStringLiteral("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)")))
+        return fail(q.lastError().text());
+    q.bindValue(0, QStringLiteral("setting.") + key);
+    q.bindValue(1, QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact));
+    if (!q.exec())
+        return fail(q.lastError().text());
+    return true;
+}
+
+QVariant ProjectStore::setting(const QString &key, const QVariant &def) const
+{
+    QSqlQuery q(m_db);
+    if (!q.prepare(QStringLiteral("SELECT value FROM meta WHERE key=?")))
+        return def;
+    q.bindValue(0, QStringLiteral("setting.") + key);
+    if (!q.exec() || !q.next())
+        return def;
+    const QJsonDocument doc = QJsonDocument::fromJson(q.value(0).toString().toUtf8());
+    return doc.isNull() ? def : doc.toVariant();
 }
 
 } // namespace sched

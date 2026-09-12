@@ -71,6 +71,12 @@ Flickable {
                         enabled: app.recentFiles.length > 0
                         onClicked: app.openProject(app.recentFiles[0])
                     }
+                    AppButton {
+                        text: qsTr("📥 Excel 导入")
+                        variant: "subtle"
+                        enabled: app.hasProject
+                        onClicked: homeImportDialog.open()
+                    }
                 }
             }
         }
@@ -191,5 +197,10 @@ Flickable {
         id: newProjectDialog
         parent: Overlay.overlay
         onCreated: root.navigateTo(1)
+    }
+
+    ImportExcelDialog {
+        id: homeImportDialog
+        parent: Overlay.overlay
     }
 }

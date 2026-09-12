@@ -7,6 +7,7 @@
 #include "CombinedModel.h"
 #include "GroupModel.h"
 #include "PlanModels.h"
+#include "PrintController.h"
 #include "RosterModels.h"
 #include "Theme.h"
 
@@ -28,6 +29,7 @@ int main(int argc, char *argv[])
     DutyModel dutyModel(&appController);
     CombinedModel combinedModel(&appController);
     AdjustController adjustController(&appController);
+    PrintController printController(&appController);
 
     QQmlApplicationEngine engine;
     QQmlContext *ctx = engine.rootContext();
@@ -42,6 +44,7 @@ int main(int argc, char *argv[])
     ctx->setContextProperty(QStringLiteral("dutyModel"), &dutyModel);
     ctx->setContextProperty(QStringLiteral("combinedModel"), &combinedModel);
     ctx->setContextProperty(QStringLiteral("adjust"), &adjustController);
+    ctx->setContextProperty(QStringLiteral("printer"), &printController);
 
     QObject::connect(
         &engine,

@@ -40,6 +40,8 @@ class AppController : public QObject
     Q_PROPERTY(QString schedulerRunInfo READ schedulerRunInfo NOTIFY schedulerProgressed)
     Q_PROPERTY(QVariantMap schedulerReport READ schedulerReport NOTIFY schedulerProgressed)
     Q_PROPERTY(bool resultPending READ resultPending NOTIFY resultPendingChanged)
+    Q_PROPERTY(QVariantMap printSettings READ printSettings WRITE setPrintSettings NOTIFY printSettingsChanged)
+    Q_PROPERTY(bool importPending READ importPending NOTIFY importPendingChanged)
 
 public:
     explicit AppController(QObject *parent = nullptr);
@@ -110,6 +112,18 @@ public:
     Q_INVOKABLE QVariantList roomRow(qint64 roomId) const;       // 35 格 [{text,sub}]
     Q_INVOKABLE QVariantList masterGrid() const; // [{classId, className, cells:[35 × {text,courseId,major}]}]
 
+    // ---- Excel 批量导入 ----
+    Q_INVOKABLE bool writeImportTemplate(const QString &pathOrUrl);
+    // 预览：导入到暂存副本，返回 {created, updated, skipped, errors[]}
+    Q_INVOKABLE QVariantMap excelImportPreview(const QString &pathOrUrl, bool overwrite);
+    Q_INVOKABLE bool excelImportConfirm(); // 用暂存副本替换当前数据（置脏）
+    Q_INVOKABLE void excelImportCancel();
+    bool importPending() const { return m_importPending; }
+
+    // ---- 打印设置（随项目持久化）----
+    QVariantMap printSettings() const { return m_printSettings; }
+    void setPrintSettings(const QVariantMap &settings);
+
 Q_SIGNALS:
     void projectChanged();
     void projectDirtyChanged();
@@ -121,6 +135,8 @@ Q_SIGNALS:
     void schedulerProgressed();
     void schedulerFinished();
     void resultPendingChanged();
+    void importPendingChanged();
+    void printSettingsChanged();
 
 private:
     static QString toLocalPath(const QString &pathOrUrl);
@@ -133,6 +149,12 @@ private:
     QString m_lastError;
     bool m_hasProject = false;
     bool m_dirty = false;
+
+    // Excel 导入暂存
+    sched::School m_importStaging;
+    QVariantMap m_importReport;
+    bool m_importPending = false;
+    QVariantMap m_printSettings;
 
     // 自动排课状态
     sched::SchedulerEngine *m_engine = nullptr;

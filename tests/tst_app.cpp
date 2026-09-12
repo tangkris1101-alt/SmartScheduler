@@ -3,6 +3,7 @@
 #include "CombinedModel.h"
 #include "GroupModel.h"
 #include "PlanModels.h"
+#include "PrintController.h"
 #include "RosterModels.h"
 
 #include <QTemporaryDir>
@@ -36,6 +37,7 @@ private Q_SLOTS:
     void adjustUndoRedo();
     void unplacedAndClear();
     void temporaryModeOps();
+    void printExport();
 };
 
 void TestApp::projectLifecycle()
@@ -797,6 +799,71 @@ void TestApp::temporaryModeOps()
     QVERIFY(!adjust.temporaryMode());
     QCOMPARE(s->schedule.assignments, snapshot);
     QVERIFY(!app.projectDirty());
+}
+
+void TestApp::printExport()
+{
+    AppController app;
+    app.newProject(QStringLiteral("打印校"), 5, 7, 4, 20);
+    auto *s = app.school();
+    sched::ClassInfo c1; c1.name = QStringLiteral("1班");
+    sched::ClassInfo c2; c2.name = QStringLiteral("2班");
+    const qint64 class1 = s->addClass(c1);
+    const qint64 class2 = s->addClass(c2);
+    sched::Course yw; yw.name = QStringLiteral("语文"); yw.shortName = QStringLiteral("语");
+    const qint64 yuwen = s->addCourse(yw);
+    sched::Teacher tz; tz.name = QStringLiteral("张明");
+    const qint64 teacher = s->addTeacher(tz);
+    sched::PlanEntry e; e.classId = class1; e.courseId = yuwen; e.teacherIds = {teacher};
+    e.weeklyPeriods = 3;
+    s->addPlanEntry(e);
+    s->schedule.setAssignment(class1, 0, 0, yuwen);
+    s->schedule.setAssignment(class1, 1, 1, yuwen);
+    s->schedule.setAssignment(class2, 0, 0, yuwen);
+
+    PrintController printer(&app);
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QVariantMap opt{{QStringLiteral("landscape"), true},
+                          {QStringLiteral("showTeachers"), true},
+                          {QStringLiteral("headerNote"), QStringLiteral("2025 春季学期")}};
+
+    // PDF：非空文件
+    const QString pdf = dir.filePath(QStringLiteral("out.pdf"));
+    if (!printer.exportPdf(pdf, QStringLiteral("class"), {class1, class2}, opt))
+        QSKIP("当前环境不支持 PDF 渲染");
+    QVERIFY(QFileInfo(pdf).size() > 500);
+
+    // 总课表 PDF
+    QVERIFY(printer.exportPdf(dir.filePath(QStringLiteral("master.pdf")), QStringLiteral("master"),
+                              {}, opt));
+
+    // 预览 PNG
+    const QString url = printer.renderPreview(QStringLiteral("class"), {class1}, opt);
+    QVERIFY(url.startsWith(QStringLiteral("file:///")));
+    QVERIFY(QFileInfo(url.section(QStringLiteral("?"), 0, 0).mid(8)).size() > 200);
+
+    // PNG 序列
+    QVERIFY(printer.exportPngs(dir.filePath(QStringLiteral("png")), QStringLiteral("class"),
+                               {class1, class2}, opt));
+    QVERIFY(QFileInfo(dir.filePath(QStringLiteral("png/page1.png"))).size() > 200);
+    QVERIFY(QFileInfo(dir.filePath(QStringLiteral("png/page2.png"))).size() > 200);
+
+    // Excel 导出
+    const QString xlsx = dir.filePath(QStringLiteral("out.xlsx"));
+    QVERIFY2(printer.exportExcel(xlsx, QStringLiteral("class"), {class1}),
+             qPrintable(printer.lastError()));
+    QVERIFY(QFileInfo(xlsx).size() > 500);
+
+    // 打印设置随项目持久化
+    app.setPrintSettings(opt);
+    const QString projPath = dir.filePath(QStringLiteral("print.spk"));
+    QVERIFY(app.saveProjectAs(projPath));
+    app.closeProject();
+    QVERIFY(app.openProject(projPath));
+    QCOMPARE(app.printSettings().value(QStringLiteral("headerNote")).toString(),
+             QStringLiteral("2025 春季学期"));
+    app.closeProject();
 }
 
 // QPdfWriter/QFontDatabase 需要 QGuiApplication；headless 用 minimal 平台

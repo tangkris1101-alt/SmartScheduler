@@ -32,6 +32,8 @@ qt_add_qml_module(SmartScheduler
         ui/LimitsPage.qml
         ui/SchedulerPage.qml
         ui/TimetablePage.qml
+        ui/PrintPage.qml
+        ui/ImportExcelDialog.qml
 )
 
 target_link_libraries(SmartScheduler PRIVATE

@@ -1,7 +1,7 @@
 # 3rdparty
 
-第三方库占位目录。
+第三方库（源码内嵌，随主仓库提交）。
 
-- Excel 导入器（`ExcelImporter`，对应老“自明排课系统”的名单/计划导入）计划在后续里程碑引入，
-  预计使用 QXlsx 之类的开源库读取 .xlsx，届时置于此目录。
-- M2 里程碑暂不包含 Excel 实现。
+- **QXlsx**（`QXlsx/`，v1.5.0，MIT）：Excel .xlsx 读写，用于 Excel 批量导入与课表导出。
+  顶层 CMake `add_subdirectory(3rdparty/QXlsx/QXlsx)`，链接目标 `QXlsx::QXlsx`（静态）。
+- 排课引擎与领域模型不依赖第三方库。

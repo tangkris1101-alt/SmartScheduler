@@ -30,6 +30,10 @@ public:
     // 整体载入（覆盖 *school 原有内容）
     bool load(School *school);
 
+    // 项目级设置（存 meta 表，随 save 持久化；需数据库已打开）
+    bool setSetting(const QString &key, const QVariant &value);
+    QVariant setting(const QString &key, const QVariant &def = {}) const;
+
     QString lastError() const { return m_lastError; }
 
 private:

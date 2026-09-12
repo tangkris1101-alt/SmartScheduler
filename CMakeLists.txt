@@ -19,6 +19,9 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS
 
 qt_standard_project_setup(REQUIRES 6.8)
 
+# QXlsx：Excel 读写第三方库（静态，v1.5.0 源码内嵌）
+add_subdirectory(3rdparty/QXlsx/QXlsx)
+
 add_subdirectory(src)
 
 include(CTest)

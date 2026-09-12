@@ -68,6 +68,11 @@ Item {
                 onClicked: root.currentModel.appendRow()
             }
             AppButton {
+                text: qsTr("📥 Excel 导入")
+                enabled: app.hasProject
+                onClicked: importDialog.open()
+            }
+            AppButton {
                 text: qsTr("删除")
                 variant: "danger"
                 enabled: root.selectedRow >= 0 && root.selectedRow < root.currentModel.count
@@ -199,5 +204,10 @@ Item {
             root.currentModel.removeRow(root.selectedRow)
             root.selectedRow = -1
         }
+    }
+
+    ImportExcelDialog {
+        id: importDialog
+        parent: Overlay.overlay
     }
 }

@@ -37,7 +37,7 @@ ApplicationWindow {
     Component { id: limitComp; LimitsPage {} }
     Component { id: engineComp; SchedulerPage {} }
     Component { id: tableComp; TimetablePage {} }
-    Component { id: printComp; PlaceholderPage { icon: "🖨️"; title: qsTr("打印输出"); hint: qsTr("课表打印与 PDF/Excel 导出（后续里程碑）") } }
+    Component { id: printComp; PrintPage {} }
     readonly property var pageComponents: [homeComp, rosterComp, groupsComp, coursesComp,
                                            planComp, limitComp, engineComp, tableComp, printComp]
 
