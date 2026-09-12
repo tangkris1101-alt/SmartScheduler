@@ -18,6 +18,16 @@ jobs:
           version: '6.8.1'
           arch: win64_mingw
           cache: 'true'
+          tools: 'tools_mingw1310'
+
+      # runner 自带的 MinGW (C:\mingw64, GCC 15) 与 Qt 6.8.1 MinGW 构建（GCC 13.1）ABI 不兼容，
+      # 必须把随 Qt 安装的 MinGW 13.1 顶到 PATH 最前
+      - name: Prefer Qt-bundled MinGW
+        shell: pwsh
+        run: |
+          $qtBin = Split-Path (Get-Command qmake).Source
+          $mingwBin = Resolve-Path (Join-Path $qtBin "..\..\..\Tools\mingw1310_64\bin")
+          Add-Content $env:GITHUB_PATH $mingwBin
 
       - name: Configure
         run: cmake -S . -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
