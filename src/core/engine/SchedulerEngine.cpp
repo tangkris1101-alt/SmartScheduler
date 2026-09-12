@@ -85,10 +85,13 @@ void SchedulerEngine::start()
     m_pool = new QThreadPool(this);
     m_pool->setMaxThreadCount(std::max(1, std::min(QThread::idealThreadCount(), m_options.runs)));
 
+    // randomSeed=true 时本次运行随机取基种（用于"多次实验"，结果不复现）
+    const quint32 baseSeed = m_options.randomSeed ? QRandomGenerator::global()->generate()
+                                                  : m_options.seed;
     const int runs = std::max(1, m_options.runs);
     for (int i = 0; i < runs; ++i) {
         // 每轮独立种子，保证可复现且互不相同
-        m_pool->start(new engine::RunTask(m_school, m_options, m_options.seed + quint32(i), m_state));
+        m_pool->start(new engine::RunTask(m_school, m_options, baseSeed + quint32(i), m_state));
     }
 
     m_timer = new QTimer(this);
@@ -131,7 +134,8 @@ void SchedulerEngine::pollProgress()
 
     const int percent = int(std::min<long>(
         99, m_state->iterationsDone.load() * 100 / m_state->iterationsTotal));
-    Q_EMIT progress(percent, current);
+    const int totalRuns = std::max(1, m_options.runs);
+    Q_EMIT progress(percent, std::min(done + 1, totalRuns), totalRuns, current);
 }
 
 void SchedulerEngine::finalize()
@@ -155,7 +159,7 @@ void SchedulerEngine::finalize()
         }
     }
 
-    Q_EMIT progress(100, bestReport);
+    Q_EMIT progress(100, std::max(1, m_options.runs), std::max(1, m_options.runs), bestReport);
     Q_EMIT finished(best, bestReport);
 
     m_running = false;

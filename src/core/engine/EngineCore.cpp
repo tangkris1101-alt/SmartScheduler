@@ -93,6 +93,7 @@ Session Problem::makeSession(const PlanEntry &e, int length, bool half) const
     s.classroomId = e.classroomId;
     s.length = length;
     s.halfSession = half;
+    s.progressGroup = e.progressGroup;
     return s;
 }
 
@@ -145,6 +146,7 @@ void Problem::mergeCombined()
             Session m;
             m.entryId = -1;
             m.courseId = cg.entries.first().second;
+            bool firstMember = true;
             for (auto &l : memberLists) {
                 const int idx = l.takeFirst();
                 consumed[idx] = true;
@@ -158,6 +160,10 @@ void Problem::mergeCombined()
                     m.classroomId = s.classroomId;
                 m.length = std::max(m.length, s.length);
                 m.halfSession = m.halfSession || s.halfSession;
+                if (firstMember) {
+                    m.progressGroup = s.progressGroup; // 合班会话取首个成员的进度组
+                    firstMember = false;
+                }
             }
             merged.append(m);
         }
@@ -400,19 +406,27 @@ int Problem::hardViolations() const
 
 double Problem::progressAlignCost() const
 {
-    // 同老师同课的各班会话，首 slot 尽量相邻（老软件"进度一致"核心指标）
+    // 同老师同课同进度组的各班会话，首 slot 尽量相邻（老软件"进度一致"核心指标）
+    // progressGroup >= 0 的条目按组对齐；-1 未分组的自动归入同老师同课默认组
     double cost = 0;
-    QVector<QPair<qint64, qint64>> seen;
+    struct SeenKey {
+        qint64 teacher;
+        qint64 course;
+        int group;
+    };
+    QVector<SeenKey> seen;
     for (int s = 0; s < sessions.size(); ++s) {
         for (qint64 t : sessions[s].teacherIds) {
-            const QPair<qint64, qint64> key{t, sessions[s].courseId};
-            if (seen.contains(key))
+            const SeenKey key{t, sessions[s].courseId, sessions[s].progressGroup};
+            if (std::any_of(seen.begin(), seen.end(), [&](const SeenKey &k) {
+                    return k.teacher == key.teacher && k.course == key.course && k.group == key.group;
+                }))
                 continue;
             seen.append(key);
             QVector<int> slots;
             for (int i = 0; i < sessions.size(); ++i) {
-                if (isPlaced(i) && sessions[i].courseId == key.second
-                    && sessions[i].teacherIds.contains(t))
+                if (isPlaced(i) && sessions[i].courseId == key.course
+                    && sessions[i].progressGroup == key.group && sessions[i].teacherIds.contains(t))
                     slots.append(placements[i].slot);
             }
             std::sort(slots.begin(), slots.end());
@@ -552,12 +566,13 @@ double Problem::localSoft(int s) const
     double cost = 0;
     const Session &ss = sessions[s];
 
-    // 进度一致：s 的每个 (老师,课程) 组
+    // 进度一致：s 的每个 (老师,课程,进度组)
     const int ppd = periodsPerDay();
     for (qint64 t : ss.teacherIds) {
         QVector<int> slots;
         for (int i = 0; i < sessions.size(); ++i) {
             if (isPlaced(i) && sessions[i].courseId == ss.courseId
+                && sessions[i].progressGroup == ss.progressGroup
                 && sessions[i].teacherIds.contains(t))
                 slots.append(placements[i].slot);
         }
@@ -698,6 +713,26 @@ QualityReport Problem::report() const
             r.placedSessions++;
     r.hardViolations = hardViolations();
     r.softScore = softScore(&r.softBreakdown);
+    // 未排明细
+    for (int s = 0; s < sessions.size(); ++s) {
+        if (isPlaced(s))
+            continue;
+        const Session &ss = sessions[s];
+        QStringList classNames;
+        for (qint64 c : ss.classIds) {
+            if (const ClassInfo *ci = school.findClass(c))
+                classNames.append(ci->name);
+        }
+        const Course *co = school.findCourse(ss.courseId);
+        QString text = QStringLiteral("%1·%2")
+                           .arg(classNames.join(QStringLiteral("、")),
+                                co ? co->name : QStringLiteral("?"));
+        if (ss.length > 1)
+            text += QStringLiteral("（连%1节）").arg(ss.length);
+        if (ss.halfSession)
+            text += QStringLiteral("（单双周）");
+        r.unplaced.append(text);
+    }
     return r;
 }
 

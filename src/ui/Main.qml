@@ -35,8 +35,8 @@ ApplicationWindow {
     Component { id: coursesComp; CourseFeaturesPage {} }
     Component { id: planComp; PlanEditorPage {} }
     Component { id: limitComp; LimitsPage {} }
-    Component { id: engineComp; PlaceholderPage { icon: "▶️"; title: qsTr("自动排课"); hint: qsTr("排课引擎已就绪（M4），参数设置与质量报告界面将在 M3c 接入") } }
-    Component { id: tableComp; PlaceholderPage { icon: "📊"; title: qsTr("课表查看"); hint: qsTr("班级/老师/教室课表联动视图（后续里程碑）") } }
+    Component { id: engineComp; SchedulerPage {} }
+    Component { id: tableComp; TimetablePage {} }
     Component { id: printComp; PlaceholderPage { icon: "🖨️"; title: qsTr("打印输出"); hint: qsTr("课表打印与 PDF/Excel 导出（后续里程碑）") } }
     readonly property var pageComponents: [homeComp, rosterComp, groupsComp, coursesComp,
                                            planComp, limitComp, engineComp, tableComp, printComp]
@@ -142,6 +142,27 @@ ApplicationWindow {
                 }
 
                 Item { Layout.fillWidth: true }
+
+                // 排课运行指示
+                RowLayout {
+                    visible: app.schedulerRunning
+                    spacing: Theme.spacingXS
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        color: Theme.primary
+                        SequentialAnimation on opacity {
+                            running: app.schedulerRunning
+                            loops: Animation.Infinite
+                            NumberAnimation { to: 0.3; duration: 600 }
+                            NumberAnimation { to: 1; duration: 600 }
+                        }
+                    }
+                    Text {
+                        text: qsTr("排课中 %1%").arg(app.schedulerProgress)
+                        color: Theme.primary
+                        font.pixelSize: Theme.fontCaption
+                    }
+                }
 
                 AppButton {
                     text: qsTr("💾 保存")

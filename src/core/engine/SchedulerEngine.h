@@ -31,7 +31,7 @@ public:
     bool isRunning() const { return m_running; }
 
 Q_SIGNALS:
-    void progress(int percent, const sched::QualityReport &current);
+    void progress(int percent, int currentRun, int totalRuns, const sched::QualityReport &current);
     void finished(const sched::Schedule &best, const sched::QualityReport &report);
 
 private:

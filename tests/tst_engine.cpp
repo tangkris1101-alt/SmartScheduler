@@ -1,3 +1,4 @@
+#include "EngineCore.h"
 #include "SchedulerEngine.h"
 #include "model/School.h"
 
@@ -16,6 +17,9 @@ private Q_SLOTS:
     void solveSampleSchool();
     void reproducible();
     void cancelStops();
+    void progressGroupScoring();
+    void randomSeedRuns();
+    void unplacedDetails();
 };
 
 // 测试校例的实体 id 记录
@@ -317,6 +321,126 @@ void TestEngine::cancelStops()
     QTest::qWait(400);
     QCOMPARE(spyProgress.count(), progressCount);
     QVERIFY(!engine.isRunning());
+}
+
+// progressGroup 进入进度一致软约束（白盒：直接操作 Problem）
+void TestEngine::progressGroupScoring()
+{
+    // 张老师教 1/2 班语文各 2 节
+    School school;
+    school.timeConfig.daysPerWeek = 5;
+    school.timeConfig.periodsPerDay = 7;
+    school.timeConfig.morningPeriods = 4;
+    ClassInfo c1; c1.name = QStringLiteral("1班");
+    ClassInfo c2; c2.name = QStringLiteral("2班");
+    const qint64 class1 = school.addClass(c1);
+    const qint64 class2 = school.addClass(c2);
+    Course yw; yw.name = QStringLiteral("语文");
+    const qint64 yuwen = school.addCourse(yw);
+    Teacher tz; tz.name = QStringLiteral("张");
+    const qint64 teacher = school.addTeacher(tz);
+
+    PlanEntry e1; e1.classId = class1; e1.courseId = yuwen; e1.teacherIds = {teacher};
+    e1.weeklyPeriods = 1; e1.progressGroup = -1;
+    PlanEntry e2; e2.classId = class2; e2.courseId = yuwen; e2.teacherIds = {teacher};
+    e2.weeklyPeriods = 1; e2.progressGroup = -1;
+    school.addPlanEntry(e1);
+    const qint64 entry2 = school.addPlanEntry(e2);
+
+    // 同组（默认 -1 自动归同组）：两班语文相邻排比隔开罚分低
+    {
+        engine::Problem p(school);
+        p.apply(0, 0, 0);  // 1班语文 slot0
+        p.apply(1, 1, 0);  // 2班语文 slot1（相邻）
+        QMap<QString, double> bdAdjacent;
+        p.softScore(&bdAdjacent);
+
+        engine::Problem p2(school);
+        p2.apply(0, 0, 0);
+        p2.apply(1, 7, 0); // 2班语文 slot7（不相邻）
+        QMap<QString, double> bdApart;
+        p2.softScore(&bdApart);
+
+        QVERIFY(bdAdjacent.value(QStringLiteral("progressAlign"))
+                < bdApart.value(QStringLiteral("progressAlign")));
+        QCOMPARE(bdAdjacent.value(QStringLiteral("progressAlign")), 0.0);
+    }
+
+    // 不同进度组：不再要求相邻，相邻与隔开罚分相同（各自组内只有 1 条会话）
+    school.findPlanEntry(entry2)->progressGroup = 2;
+    {
+        engine::Problem p(school);
+        p.apply(0, 0, 0);
+        p.apply(1, 1, 0);
+        QMap<QString, double> bdAdjacent;
+        p.softScore(&bdAdjacent);
+
+        engine::Problem p2(school);
+        p2.apply(0, 0, 0);
+        p2.apply(1, 7, 0);
+        QMap<QString, double> bdApart;
+        p2.softScore(&bdApart);
+
+        QCOMPARE(bdAdjacent.value(QStringLiteral("progressAlign")),
+                 bdApart.value(QStringLiteral("progressAlign")));
+        QCOMPARE(bdAdjacent.value(QStringLiteral("progressAlign")), 0.0);
+    }
+}
+
+// randomSeed=true：正常完成且硬违例为 0（不比较结果，避免随机性导致测试不稳定）
+void TestEngine::randomSeedRuns()
+{
+    SampleIds ids;
+    const School school = makeEngineSchool(&ids);
+
+    EngineOptions opt;
+    opt.runs = 2;
+    opt.maxIterationsPerRun = 3000;
+    opt.randomSeed = true;
+    SchedulerEngine engine(school, opt);
+    QSignalSpy spy(&engine, &SchedulerEngine::finished);
+    engine.start();
+    QVERIFY2(spy.wait(30000), "randomSeed 运行未完成");
+    const QualityReport report = spy.at(0).at(1).value<QualityReport>();
+    QCOMPARE(report.hardViolations, 0);
+}
+
+// 未排明细：预排占满 1班全部节位 → 语文无处可排，报告应含"1班·语文"
+void TestEngine::unplacedDetails()
+{
+    School school;
+    school.timeConfig.daysPerWeek = 2;
+    school.timeConfig.periodsPerDay = 3;
+    school.timeConfig.morningPeriods = 2;
+    ClassInfo c1; c1.name = QStringLiteral("1班");
+    const qint64 class1 = school.addClass(c1);
+    Course yw; yw.name = QStringLiteral("语文");
+    Course sx; sx.name = QStringLiteral("数学");
+    const qint64 yuwen = school.addCourse(yw);
+    const qint64 shuxue = school.addCourse(sx);
+
+    PlanEntry e; e.classId = class1; e.courseId = yuwen; e.weeklyPeriods = 2;
+    school.addPlanEntry(e);
+    // 预排数学占满全部 6 个节位
+    for (int slot = 0; slot < 6; ++slot) {
+        PreAssignment p; p.classId = class1; p.courseId = shuxue; p.slotIndex = slot;
+        school.addPreAssignment(p);
+    }
+
+    EngineOptions opt;
+    opt.runs = 1;
+    opt.maxIterationsPerRun = 100;
+    opt.seed = 5;
+    opt.placeAll = false; // 无处可排 → 记为未排
+    SchedulerEngine engine(school, opt);
+    QSignalSpy spy(&engine, &SchedulerEngine::finished);
+    engine.start();
+    QVERIFY2(spy.wait(15000), "引擎未完成");
+    const QualityReport report = spy.at(0).at(1).value<QualityReport>();
+    QVERIFY(report.placedSessions < report.totalSessions);
+    QVERIFY(report.hardViolations > 0);
+    QVERIFY(!report.unplaced.isEmpty());
+    QVERIFY(report.unplaced.first().contains(QStringLiteral("1班·语文")));
 }
 
 QTEST_GUILESS_MAIN(TestEngine)

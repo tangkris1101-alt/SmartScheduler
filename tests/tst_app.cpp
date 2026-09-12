@@ -6,6 +6,7 @@
 
 #include <QTemporaryDir>
 #include <QSettings>
+#include <QSignalSpy>
 #include <QtTest/QTest>
 
 // 桥接层单元测试：项目生命周期、模型角色读写、过滤、级联删除、分组成员
@@ -28,6 +29,7 @@ private Q_SLOTS:
     void dutyModelOps();
     void combinedModelValidation();
     void constraintsAndPreassign();
+    void schedulerBridge();
 };
 
 void TestApp::projectLifecycle()
@@ -430,6 +432,88 @@ void TestApp::constraintsAndPreassign()
     app.toggleTeacherActivity(ids.tZhang, 19, ids.yuwen);
     QCOMPARE(app.teacherActivities(ids.tZhang).size(), 0);
     QVERIFY(app.projectDirty());
+}
+
+void TestApp::schedulerBridge()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+
+    // precheck：无计划 → 有 err
+    bool hasErr = false;
+    for (const auto &item : app.precheck()) {
+        if (item.toMap().value(QStringLiteral("level")).toString() == QLatin1StringView("err"))
+            hasErr = true;
+    }
+    QVERIFY(hasErr);
+
+    // 造计划：张教 1/2 班语文各 5 节，王教 1/2 班数学各 5 节
+    auto *school = app.school();
+    for (qint64 cls : {ids.class1, ids.class2}) {
+        sched::PlanEntry e1;
+        e1.classId = cls; e1.courseId = ids.yuwen; e1.teacherIds = {ids.tZhang}; e1.weeklyPeriods = 5;
+        school->addPlanEntry(e1);
+        sched::PlanEntry e2;
+        e2.classId = cls; e2.courseId = ids.shuxue; e2.teacherIds = {ids.tWang}; e2.weeklyPeriods = 5;
+        school->addPlanEntry(e2);
+    }
+
+    // precheck 通过（含 ok 级条目）
+    bool hasOk = false;
+    for (const auto &item : app.precheck()) {
+        if (item.toMap().value(QStringLiteral("level")).toString() == QLatin1StringView("ok"))
+            hasOk = true;
+    }
+    QVERIFY(hasOk);
+
+    // 运行引擎（固定 seed，随机性可控）
+    QSignalSpy spy(&app, &AppController::schedulerFinished);
+    app.runScheduler({{QStringLiteral("runs"), 2},
+                      {QStringLiteral("maxIterations"), 5000},
+                      {QStringLiteral("seed"), 99},
+                      {QStringLiteral("randomSeed"), false},
+                      {QStringLiteral("placeAll"), true}});
+    QVERIFY(app.schedulerRunning());
+    QVERIFY2(spy.wait(30000), "排课未在 30s 内完成");
+    QVERIFY(app.resultPending());
+    QCOMPARE(app.schedulerReport().value(QStringLiteral("hardViolations")).toInt(), 0);
+    QVERIFY(!app.schedulerRunning());
+
+    // 应用结果：写入 School 并置脏
+    QVERIFY(!app.hasSchedule());
+    app.applyResult();
+    QVERIFY(app.hasSchedule());
+    QVERIFY(!app.resultPending());
+    QVERIFY(app.projectDirty());
+    QCOMPARE(app.assignmentsCount(), 20); // 2 班 × 10 节
+
+    // 班级视图数据：1班 35 格中 10 格有课
+    const QVariantList row = app.classRow(ids.class1);
+    QCOMPARE(row.size(), 35);
+    int filled = 0;
+    for (const auto &c : row) {
+        if (!c.toMap().isEmpty())
+            filled++;
+    }
+    QCOMPARE(filled, 10);
+
+    // 老师视图：张老师 10 格；总课表 2 行
+    int teacherCells = 0;
+    for (const auto &c : app.teacherRow(ids.tZhang))
+        teacherCells += c.toList().size();
+    QCOMPARE(teacherCells, 10);
+    QCOMPARE(app.masterGrid().size(), 2);
+
+    // 再跑一次后放弃：课表保持上一次应用的结果
+    QSignalSpy spy2(&app, &AppController::schedulerFinished);
+    app.runScheduler({{QStringLiteral("runs"), 1},
+                      {QStringLiteral("maxIterations"), 1000},
+                      {QStringLiteral("randomSeed"), true},
+                      {QStringLiteral("placeAll"), true}});
+    QVERIFY2(spy2.wait(30000), "第二次排课未完成");
+    app.discardResult();
+    QVERIFY(!app.resultPending());
+    QCOMPARE(app.assignmentsCount(), 20);
 }
 
 QTEST_GUILESS_MAIN(TestApp)

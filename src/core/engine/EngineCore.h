@@ -21,6 +21,7 @@ struct Session {
     qint64 classroomId = -1;      // -1 表示不占公共教室
     int length = 1;               // 连课长度（1=单节）
     bool halfSession = false;     // 单双周会话（只占一个 half）
+    int progressGroup = -1;       // 进度一致组号（-1 未分组，自动归入同老师同课默认组）
     bool fixed = false;           // 预排固定，不可移动
     int fixedSlot = -1;           // 预排的起始 slot
 };

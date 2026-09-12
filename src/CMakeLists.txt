@@ -30,6 +30,8 @@ qt_add_qml_module(SmartScheduler
         ui/CourseFeaturesPage.qml
         ui/PlanEditorPage.qml
         ui/LimitsPage.qml
+        ui/SchedulerPage.qml
+        ui/TimetablePage.qml
 )
 
 target_link_libraries(SmartScheduler PRIVATE

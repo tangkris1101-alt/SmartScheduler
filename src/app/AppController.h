@@ -1,11 +1,18 @@
 #pragma once
 
+#include "EngineTypes.h"
 #include "ProjectStore.h"
 #include "model/School.h"
 
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
+
+namespace sched {
+class SchedulerEngine;
+}
 
 // 应用控制器：QML 与领域层之间的桥。持有内存中的 School 聚合根与 ProjectStore，
 // 负责项目的新建/打开/保存与脏标记；名单模型通过 school() 直接读写聚合根。
@@ -26,6 +33,13 @@ class AppController : public QObject
     Q_PROPERTY(int periodsPerDay READ periodsPerDay NOTIFY projectChanged)
     Q_PROPERTY(int morningPeriods READ morningPeriods NOTIFY projectChanged)
     Q_PROPERTY(int weeksPerTerm READ weeksPerTerm NOTIFY projectChanged)
+    Q_PROPERTY(bool hasSchedule READ hasSchedule NOTIFY scheduleChanged)
+    Q_PROPERTY(int assignmentsCount READ assignmentsCount NOTIFY scheduleChanged)
+    Q_PROPERTY(bool schedulerRunning READ schedulerRunning NOTIFY schedulerRunningChanged)
+    Q_PROPERTY(int schedulerProgress READ schedulerProgress NOTIFY schedulerProgressed)
+    Q_PROPERTY(QString schedulerRunInfo READ schedulerRunInfo NOTIFY schedulerProgressed)
+    Q_PROPERTY(QVariantMap schedulerReport READ schedulerReport NOTIFY schedulerProgressed)
+    Q_PROPERTY(bool resultPending READ resultPending NOTIFY resultPendingChanged)
 
 public:
     explicit AppController(QObject *parent = nullptr);
@@ -72,12 +86,39 @@ public:
     Q_INVOKABLE QVariantList teacherActivities(qint64 teacherId) const; // [{slotIndex, courseId, courseName}]
     Q_INVOKABLE void toggleTeacherActivity(qint64 teacherId, int slot, qint64 courseId);
 
+    // ---- 自动排课 ----
+    bool schedulerRunning() const { return m_schedulerRunning; }
+    int schedulerProgress() const { return m_schedulerProgress; }
+    QString schedulerRunInfo() const { return m_schedulerRunInfo; }
+    QVariantMap schedulerReport() const { return m_schedulerReport; }
+    bool resultPending() const { return m_resultPending; }
+    bool hasSchedule() const { return !m_school.schedule.assignments.isEmpty(); }
+    int assignmentsCount() const { return m_school.schedule.assignments.size(); }
+
+    // options: runs / maxIterations / seed / randomSeed / placeAll
+    Q_INVOKABLE void runScheduler(const QVariantMap &options);
+    Q_INVOKABLE void cancelScheduler();
+    Q_INVOKABLE void applyResult();   // 引擎结果写入 School（替换旧课表，置脏）
+    Q_INVOKABLE void discardResult();
+    Q_INVOKABLE QVariantList precheck() const; // 数据健康检查 [{level: ok|warn|err, text}]
+
+    // ---- 课表视图数据（只读）----
+    Q_INVOKABLE QVariantList classRow(qint64 classId) const;   // 35 格 {text,sub,courseId,half,major,pre}
+    Q_INVOKABLE QVariantList teacherRow(qint64 teacherId) const; // 35 格 [{text,sub,classId,courseId,half}]
+    Q_INVOKABLE QVariantList roomRow(qint64 roomId) const;       // 35 格 [{text,sub}]
+    Q_INVOKABLE QVariantList masterGrid() const; // [{classId, className, cells:[35 × {text,courseId,major}]}]
+
 Q_SIGNALS:
     void projectChanged();
     void projectDirtyChanged();
     void statsChanged();
     void recentFilesChanged();
     void constraintsChanged(); // 不排时间/预排/老师活动变更
+    void scheduleChanged();    // 课表内容变更（应用排课结果后）
+    void schedulerRunningChanged();
+    void schedulerProgressed();
+    void schedulerFinished();
+    void resultPendingChanged();
 
 private:
     static QString toLocalPath(const QString &pathOrUrl);
@@ -90,4 +131,14 @@ private:
     QString m_lastError;
     bool m_hasProject = false;
     bool m_dirty = false;
+
+    // 自动排课状态
+    sched::SchedulerEngine *m_engine = nullptr;
+    bool m_schedulerRunning = false;
+    int m_schedulerProgress = 0;
+    QString m_schedulerRunInfo;
+    QVariantMap m_schedulerReport;
+    bool m_resultPending = false;
+    sched::Schedule m_pendingResult;
+    sched::QualityReport m_pendingReport;
 };
