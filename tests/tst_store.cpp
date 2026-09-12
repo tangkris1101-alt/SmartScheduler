@@ -99,6 +99,7 @@ static School makeSampleSchool()
     e1.weeklyPeriods = 5;
     e1.chainedCount = 1;
     e1.chainLength = 2;
+    e1.progressGroup = 1; // 进度一致组（M3b 新增字段，验证存取）
     school.addPlanEntry(e1);
 
     // 2班数学（双师），周4.5节（单双周）

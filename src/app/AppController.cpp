@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QSettings>
 #include <QUrl>
+#include <algorithm>
 
 namespace {
 
@@ -143,4 +144,157 @@ void AppController::markDirty()
         Q_EMIT projectDirtyChanged();
     }
     Q_EMIT statsChanged(); // 名单增删会改变统计数字
+}
+
+// ==================== 限制条件 / 预排 / 老师活动 ====================
+
+namespace {
+
+// 找到（或创建）某实体的唯一不排时间约束
+template<typename S>
+static auto findNoSchedule(S &school, int entityType, qint64 entityId)
+{
+    const auto type = static_cast<sched::NoScheduleConstraint::EntityType>(entityType);
+    for (auto &c : school.noScheduleConstraints) {
+        if (c.entityType == type && c.entityId == entityId)
+            return &c;
+    }
+    return static_cast<decltype(&school.noScheduleConstraints.first())>(nullptr);
+}
+
+} // namespace
+
+QVariantList AppController::noScheduleSlots(int entityType, qint64 entityId) const
+{
+    QVariantList out;
+    const sched::NoScheduleConstraint *c = findNoSchedule(m_school, entityType, entityId);
+    if (!c)
+        return out;
+    QList<int> sorted = c->slots.values();
+    std::sort(sorted.begin(), sorted.end());
+    for (int slot : sorted)
+        out.append(slot);
+    return out;
+}
+
+void AppController::setNoScheduleSlot(int entityType, qint64 entityId, int slot, bool forbidden)
+{
+    sched::NoScheduleConstraint *c = findNoSchedule(m_school, entityType, entityId);
+    if (forbidden) {
+        if (!c) {
+            sched::NoScheduleConstraint nc;
+            nc.entityType = static_cast<sched::NoScheduleConstraint::EntityType>(entityType);
+            nc.entityId = entityId;
+            m_school.addNoScheduleConstraint(nc);
+            c = &m_school.noScheduleConstraints.last(); // add 追加在末尾
+        }
+        if (c && !c->slots.contains(slot)) {
+            c->slots.insert(slot);
+        } else {
+            return;
+        }
+    } else {
+        if (!c || !c->slots.contains(slot))
+            return;
+        c->slots.remove(slot);
+        if (c->slots.isEmpty()) // 空约束删除，保持数据整洁
+            m_school.removeNoScheduleConstraint(c->id);
+    }
+    markDirty();
+    Q_EMIT constraintsChanged();
+}
+
+void AppController::clearNoSchedule(int entityType, qint64 entityId)
+{
+    sched::NoScheduleConstraint *c = findNoSchedule(m_school, entityType, entityId);
+    if (!c)
+        return;
+    m_school.removeNoScheduleConstraint(c->id);
+    markDirty();
+    Q_EMIT constraintsChanged();
+}
+
+QVariantList AppController::preAssignments(qint64 classId) const
+{
+    QVariantList out;
+    for (const auto &p : m_school.preAssignments) {
+        if (p.classId != classId)
+            continue;
+        const sched::Course *course = m_school.findCourse(p.courseId);
+        out.append(QVariantMap{{QStringLiteral("courseId"), p.courseId},
+                               {QStringLiteral("courseName"),
+                                course ? course->name : QStringLiteral("?")},
+                               {QStringLiteral("slotIndex"), p.slotIndex}});
+    }
+    return out;
+}
+
+void AppController::togglePreAssignment(qint64 classId, qint64 courseId, int slot)
+{
+    // 同班同 slot 只允许一条预排：已存在则取消，否则写入
+    for (const auto &p : m_school.preAssignments) {
+        if (p.classId == classId && p.slotIndex == slot) {
+            m_school.removePreAssignment(p.id);
+            markDirty();
+            Q_EMIT constraintsChanged();
+            return;
+        }
+    }
+    sched::PreAssignment p;
+    p.classId = classId;
+    p.courseId = courseId;
+    p.slotIndex = slot;
+    m_school.addPreAssignment(p);
+    markDirty();
+    Q_EMIT constraintsChanged();
+}
+
+QVariantList AppController::planCourses(qint64 classId) const
+{
+    QVariantList out;
+    QVector<qint64> seen;
+    for (const auto &e : m_school.planEntries) {
+        if (e.classId != classId || seen.contains(e.courseId))
+            continue;
+        seen.append(e.courseId);
+        const sched::Course *course = m_school.findCourse(e.courseId);
+        out.append(QVariantMap{{QStringLiteral("id"), e.courseId},
+                               {QStringLiteral("name"),
+                                course ? course->name : QStringLiteral("?")}});
+    }
+    return out;
+}
+
+QVariantList AppController::teacherActivities(qint64 teacherId) const
+{
+    QVariantList out;
+    for (const auto &a : m_school.teacherActivities) {
+        if (a.teacherId != teacherId)
+            continue;
+        const sched::Course *course = m_school.findCourse(a.activityCourseId);
+        out.append(QVariantMap{{QStringLiteral("slotIndex"), a.slotIndex},
+                               {QStringLiteral("courseId"), a.activityCourseId},
+                               {QStringLiteral("courseName"),
+                                course ? course->name : QStringLiteral("?")}});
+    }
+    return out;
+}
+
+void AppController::toggleTeacherActivity(qint64 teacherId, int slot, qint64 courseId)
+{
+    for (const auto &a : m_school.teacherActivities) {
+        if (a.teacherId == teacherId && a.slotIndex == slot) {
+            m_school.removeTeacherActivity(a.id);
+            markDirty();
+            Q_EMIT constraintsChanged();
+            return;
+        }
+    }
+    sched::TeacherActivity a;
+    a.teacherId = teacherId;
+    a.slotIndex = slot;
+    a.activityCourseId = courseId;
+    m_school.addTeacherActivity(a);
+    markDirty();
+    Q_EMIT constraintsChanged();
 }

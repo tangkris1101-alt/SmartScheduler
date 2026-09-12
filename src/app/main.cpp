@@ -3,7 +3,9 @@
 #include <QQmlContext>
 
 #include "AppController.h"
+#include "CombinedModel.h"
 #include "GroupModel.h"
+#include "PlanModels.h"
 #include "RosterModels.h"
 #include "Theme.h"
 
@@ -21,6 +23,9 @@ int main(int argc, char *argv[])
     TeacherListModel teacherModel(&appController);
     ClassroomListModel classroomModel(&appController);
     GroupModel groupModel(&appController);
+    PlanListModel planModel(&appController);
+    DutyModel dutyModel(&appController);
+    CombinedModel combinedModel(&appController);
 
     QQmlApplicationEngine engine;
     QQmlContext *ctx = engine.rootContext();
@@ -31,6 +36,9 @@ int main(int argc, char *argv[])
     ctx->setContextProperty(QStringLiteral("teacherModel"), &teacherModel);
     ctx->setContextProperty(QStringLiteral("classroomModel"), &classroomModel);
     ctx->setContextProperty(QStringLiteral("groupModel"), &groupModel);
+    ctx->setContextProperty(QStringLiteral("planModel"), &planModel);
+    ctx->setContextProperty(QStringLiteral("dutyModel"), &dutyModel);
+    ctx->setContextProperty(QStringLiteral("combinedModel"), &combinedModel);
 
     QObject::connect(
         &engine,

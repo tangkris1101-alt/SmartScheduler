@@ -159,7 +159,8 @@ bool ProjectStore::createSchema()
         " chain_length INTEGER NOT NULL DEFAULT 2, morning_periods INTEGER NOT NULL DEFAULT -1,"
         " is_combined INTEGER NOT NULL DEFAULT 0, classroom_id INTEGER NOT NULL DEFAULT -1,"
         " start_week INTEGER NOT NULL DEFAULT 1, end_week INTEGER NOT NULL DEFAULT 0,"
-        " sync_course_id INTEGER NOT NULL DEFAULT -1)",
+        " sync_course_id INTEGER NOT NULL DEFAULT -1,"
+        " progress_group INTEGER NOT NULL DEFAULT -1)",
         "CREATE TABLE plan_entry_teachers("
         " entry_id INTEGER NOT NULL REFERENCES plan_entries(id) ON DELETE CASCADE,"
         " teacher_id INTEGER NOT NULL, PRIMARY KEY(entry_id, teacher_id))",
@@ -354,8 +355,9 @@ bool ProjectStore::save(const School &school)
         QSqlQuery qe(m_db), qt(m_db);
         if (!qe.prepare(QStringLiteral(
                 "INSERT INTO plan_entries(id,class_id,course_id,weekly_periods,chained_count,"
-                " chain_length,morning_periods,is_combined,classroom_id,start_week,end_week,sync_course_id)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"))
+                " chain_length,morning_periods,is_combined,classroom_id,start_week,end_week,sync_course_id,"
+                " progress_group)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"))
             || !qt.prepare(QStringLiteral(
                    "INSERT INTO plan_entry_teachers(entry_id,teacher_id) VALUES(?,?)"))) {
             rollback();
@@ -374,6 +376,7 @@ bool ProjectStore::save(const School &school)
             qe.addBindValue(e.startWeek);
             qe.addBindValue(e.endWeek);
             qe.addBindValue(e.syncCourseId);
+            qe.addBindValue(e.progressGroup);
             if (!qe.exec()) {
                 rollback();
                 return fail(qe.lastError().text());
@@ -628,7 +631,7 @@ bool ProjectStore::load(School *school)
         QSqlQuery qe(m_db);
         if (!qe.exec(QStringLiteral(
                 "SELECT id,class_id,course_id,weekly_periods,chained_count,chain_length,"
-                "morning_periods,is_combined,classroom_id,start_week,end_week,sync_course_id"
+                "morning_periods,is_combined,classroom_id,start_week,end_week,sync_course_id,progress_group"
                 " FROM plan_entries ORDER BY id")))
             return fail(qe.lastError().text());
         while (qe.next()) {
@@ -645,6 +648,7 @@ bool ProjectStore::load(School *school)
             e.startWeek = qe.value(9).toInt();
             e.endWeek = qe.value(10).toInt();
             e.syncCourseId = qe.value(11).toLongLong();
+            e.progressGroup = qe.value(12).toInt();
             school->planEntries.append(e);
         }
         QSqlQuery qt(m_db);

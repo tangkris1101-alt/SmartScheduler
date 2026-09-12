@@ -33,8 +33,8 @@ ApplicationWindow {
     Component { id: rosterComp; RosterPage {} }
     Component { id: groupsComp; GroupsPage {} }
     Component { id: coursesComp; CourseFeaturesPage {} }
-    Component { id: planComp; PlaceholderPage { icon: "📅"; title: qsTr("教学计划"); hint: qsTr("按班编辑教学计划：周课时、连课、合班、单双周（M3b 交付）") } }
-    Component { id: limitComp; PlaceholderPage { icon: "🚫"; title: qsTr("限制条件"); hint: qsTr("班级/课程/老师/教室不排时间网格（M3b 交付）") } }
+    Component { id: planComp; PlanEditorPage {} }
+    Component { id: limitComp; LimitsPage {} }
     Component { id: engineComp; PlaceholderPage { icon: "▶️"; title: qsTr("自动排课"); hint: qsTr("排课引擎已就绪（M4），参数设置与质量报告界面将在 M3c 接入") } }
     Component { id: tableComp; PlaceholderPage { icon: "📊"; title: qsTr("课表查看"); hint: qsTr("班级/老师/教室课表联动视图（后续里程碑）") } }
     Component { id: printComp; PlaceholderPage { icon: "🖨️"; title: qsTr("打印输出"); hint: qsTr("课表打印与 PDF/Excel 导出（后续里程碑）") } }

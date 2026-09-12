@@ -2,8 +2,12 @@
 add_library(sched_app STATIC
     AppController.cpp
     AppController.h
+    CombinedModel.cpp
+    CombinedModel.h
     GroupModel.cpp
     GroupModel.h
+    PlanModels.cpp
+    PlanModels.h
     RosterModels.cpp
     RosterModels.h
     Theme.cpp

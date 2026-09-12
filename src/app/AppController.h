@@ -22,6 +22,10 @@ class AppController : public QObject
     Q_PROPERTY(int teacherCount READ teacherCount NOTIFY statsChanged)
     Q_PROPERTY(int classroomCount READ classroomCount NOTIFY statsChanged)
     Q_PROPERTY(int planEntryCount READ planEntryCount NOTIFY statsChanged)
+    Q_PROPERTY(int daysPerWeek READ daysPerWeek NOTIFY projectChanged)
+    Q_PROPERTY(int periodsPerDay READ periodsPerDay NOTIFY projectChanged)
+    Q_PROPERTY(int morningPeriods READ morningPeriods NOTIFY projectChanged)
+    Q_PROPERTY(int weeksPerTerm READ weeksPerTerm NOTIFY projectChanged)
 
 public:
     explicit AppController(QObject *parent = nullptr);
@@ -37,6 +41,10 @@ public:
     int teacherCount() const { return m_school.teachers.size(); }
     int classroomCount() const { return m_school.classrooms.size(); }
     int planEntryCount() const { return m_school.planEntries.size(); }
+    int daysPerWeek() const { return m_school.timeConfig.daysPerWeek; }
+    int periodsPerDay() const { return m_school.timeConfig.periodsPerDay; }
+    int morningPeriods() const { return m_school.timeConfig.morningPeriods; }
+    int weeksPerTerm() const { return m_school.timeConfig.weeksPerTerm; }
 
     Q_INVOKABLE void newProject(const QString &name, int daysPerWeek, int periodsPerDay,
                                 int morningPeriods, int weeksPerTerm);
@@ -47,13 +55,29 @@ public:
     Q_INVOKABLE QString lastError() const { return m_lastError; }
 
     sched::School *school() { return &m_school; }
+    const sched::School *school() const { return &m_school; }
     void markDirty(); // 编辑回写后调用：置脏并刷新统计
+
+    // ---- 限制条件（不排时间）：entityType 0=班级 1=课程 2=老师 3=教室 ----
+    Q_INVOKABLE QVariantList noScheduleSlots(int entityType, qint64 entityId) const;
+    Q_INVOKABLE void setNoScheduleSlot(int entityType, qint64 entityId, int slot, bool forbidden);
+    Q_INVOKABLE void clearNoSchedule(int entityType, qint64 entityId);
+
+    // ---- 固定预排 ----
+    Q_INVOKABLE QVariantList preAssignments(qint64 classId) const; // [{courseId, courseName, slotIndex}]
+    Q_INVOKABLE void togglePreAssignment(qint64 classId, qint64 courseId, int slot);
+    Q_INVOKABLE QVariantList planCourses(qint64 classId) const;    // 该班计划内课程 [{id, name}]
+
+    // ---- 老师活动时间 ----
+    Q_INVOKABLE QVariantList teacherActivities(qint64 teacherId) const; // [{slotIndex, courseId, courseName}]
+    Q_INVOKABLE void toggleTeacherActivity(qint64 teacherId, int slot, qint64 courseId);
 
 Q_SIGNALS:
     void projectChanged();
     void projectDirtyChanged();
     void statsChanged();
     void recentFilesChanged();
+    void constraintsChanged(); // 不排时间/预排/老师活动变更
 
 private:
     static QString toLocalPath(const QString &pathOrUrl);

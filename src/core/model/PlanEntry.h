@@ -20,6 +20,7 @@ struct PlanEntry {
     int startWeek = 1;                 // 起始周
     int endWeek = 0;                   // 结束周，0 表示到学期末
     qint64 syncCourseId = -1;          // 同步课程（与该课程同时同节排课），-1 无
+    int progressGroup = -1;            // 进度一致组号（同老师同课同组要求连排），-1 未分组
 
     bool operator==(const PlanEntry &) const = default;
 };

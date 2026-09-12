@@ -1,5 +1,7 @@
 #include "AppController.h"
+#include "CombinedModel.h"
 #include "GroupModel.h"
+#include "PlanModels.h"
 #include "RosterModels.h"
 
 #include <QTemporaryDir>
@@ -22,6 +24,10 @@ private Q_SLOTS:
     void classModelEditFilterCascade();
     void courseTeacherClassroomRoles();
     void groupModelMembers();
+    void planListModelOps();
+    void dutyModelOps();
+    void combinedModelValidation();
+    void constraintsAndPreassign();
 };
 
 void TestApp::projectLifecycle()
@@ -199,6 +205,230 @@ void TestApp::groupModelMembers()
     QVERIFY(groups.set(0, QStringLiteral("name"), QStringLiteral("语文组")));
     QVERIFY(groups.removeRow(0));
     QCOMPARE(groups.count(), 0);
+    QVERIFY(app.projectDirty());
+}
+
+// 造一所 2 班 2 课 2 师的最小校例，返回各 id
+struct MiniSchool {
+    qint64 class1, class2, yuwen, shuxue, tZhang, tWang;
+};
+
+static MiniSchool makeMini(AppController &app)
+{
+    MiniSchool ids{};
+    app.newProject(QStringLiteral("M3b校"), 5, 7, 4, 20);
+    sched::ClassInfo c1; c1.name = QStringLiteral("1班");
+    sched::ClassInfo c2; c2.name = QStringLiteral("2班");
+    ids.class1 = app.school()->addClass(c1);
+    ids.class2 = app.school()->addClass(c2);
+    sched::Course yw; yw.name = QStringLiteral("语文");
+    sched::Course sx; sx.name = QStringLiteral("数学");
+    ids.yuwen = app.school()->addCourse(yw);
+    ids.shuxue = app.school()->addCourse(sx);
+    sched::Teacher tz; tz.name = QStringLiteral("张");
+    sched::Teacher tw; tw.name = QStringLiteral("王");
+    ids.tZhang = app.school()->addTeacher(tz);
+    ids.tWang = app.school()->addTeacher(tw);
+    return ids;
+}
+
+void TestApp::planListModelOps()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+
+    PlanListModel model(&app);
+    QCOMPARE(model.count(), 0);
+    model.setCurrentClassId(ids.class1);
+
+    const qint64 e1 = model.addEntry(ids.yuwen);
+    QVERIFY(e1 > 0);
+    QCOMPARE(model.count(), 1);
+    QCOMPARE(model.get(0, QStringLiteral("courseName")).toString(), QStringLiteral("语文"));
+    QCOMPARE(model.get(0, QStringLiteral("weeklyPeriods")).toDouble(), 2.0);
+
+    // 字段写入 + 解析角色
+    QVERIFY(model.set(0, QStringLiteral("weeklyPeriods"), 4.5));
+    QVERIFY(model.set(0, QStringLiteral("chainedCount"), 1));
+    QVERIFY(model.set(0, QStringLiteral("chainLength"), 2));
+    QVERIFY(model.set(0, QStringLiteral("progressGroup"), 2));
+    model.toggleTeacher(0, ids.tZhang);
+    QCOMPARE(model.get(0, QStringLiteral("teacherNames")).toString(), QStringLiteral("张"));
+    QCOMPARE(model.get(0, QStringLiteral("progressGroup")).toInt(), 2);
+    QCOMPARE(model.totalWeeklyPeriods(), 4.5);
+
+    // 重复课程警告
+    model.addEntry(ids.yuwen);
+    QCOMPARE(model.count(), 2);
+    QCOMPARE(model.get(0, QStringLiteral("duplicate")).toBool(), true);
+    QCOMPARE(model.get(1, QStringLiteral("duplicate")).toBool(), true);
+    QVERIFY(model.removeRow(1));
+    QCOMPARE(model.get(0, QStringLiteral("duplicate")).toBool(), false);
+
+    // 复制到 2 班：首次全部复制，再次跳过，overwrite 后覆盖
+    QCOMPARE(model.copyToClass(ids.class2, false), 1);
+    QCOMPARE(model.copyToClass(ids.class2, false), 0); // 已存在跳过
+    QVERIFY(model.set(0, QStringLiteral("weeklyPeriods"), 6));
+    QCOMPARE(model.copyToClass(ids.class2, true), 1);
+    const auto &entries = app.school()->planEntries;
+    double copiedPeriods = 0;
+    for (const auto &e : entries) {
+        if (e.classId == ids.class2)
+            copiedPeriods = e.weeklyPeriods;
+    }
+    QCOMPARE(copiedPeriods, 6.0);
+
+    // 切换班级视图
+    model.setCurrentClassId(ids.class2);
+    QCOMPARE(model.count(), 1);
+    QCOMPARE(model.get(0, QStringLiteral("weeklyPeriods")).toDouble(), 6.0);
+    QVERIFY(app.projectDirty());
+}
+
+void TestApp::dutyModelOps()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+
+    DutyModel duty(&app);
+    duty.setCurrentTeacherId(ids.tZhang);
+    QCOMPARE(duty.count(), 0);
+
+    // 批量设置任教：张老师教 1/2 班语文各 5 节
+    QCOMPARE(duty.setDuty(ids.yuwen, {ids.class1, ids.class2}, 5), 2);
+    QCOMPARE(duty.count(), 2);
+    QCOMPARE(duty.setDuty(ids.yuwen, {ids.class1, ids.class2}, 5), 0); // 重复设置不再新增
+    QCOMPARE(app.school()->planEntries.size(), 2);
+
+    // 进度组设置
+    QVERIFY(duty.set(0, QStringLiteral("progressGroup"), 1));
+    QCOMPARE(app.school()->planEntries[0].progressGroup, 1);
+
+    // 解除任教：从条目中摘掉老师（条目保留）
+    QVERIFY(duty.removeRow(0));
+    QCOMPARE(duty.count(), 1);
+    QCOMPARE(app.school()->planEntries.size(), 2); // 条目仍在，仅老师列表变化
+    QVERIFY(app.school()->planEntries[0].teacherIds.isEmpty()
+            || !app.school()->planEntries[0].teacherIds.contains(ids.tZhang));
+}
+
+void TestApp::combinedModelValidation()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+
+    // 1/2 班体育式合班：这里用语文合班，两班同课同老师
+    DutyModel duty(&app);
+    duty.setCurrentTeacherId(ids.tZhang);
+    duty.setDuty(ids.yuwen, {ids.class1, ids.class2}, 2);
+    // 标记为合班课
+    for (auto &e : app.school()->planEntries)
+        e.isCombined = true;
+    // 再加一条 1班数学（王老师）合班课 —— 课程不一致
+    sched::PlanEntry e3;
+    e3.classId = ids.class1;
+    e3.courseId = ids.shuxue;
+    e3.teacherIds = {ids.tWang};
+    e3.weeklyPeriods = 2;
+    e3.isCombined = true;
+    const qint64 entryMath = app.school()->addPlanEntry(e3);
+
+    CombinedModel combined(&app);
+    QCOMPARE(combined.unlinkedEntries().size(), 3); // 三条合班课均未关联
+
+    const qint64 gid = combined.addGroup(QStringLiteral("语文合班"));
+    QVERIFY(gid > 0);
+    // 找语文两条 entry id
+    qint64 entry1 = -1, entry2 = -1;
+    for (const auto &e : app.school()->planEntries) {
+        if (e.courseId == ids.yuwen && e.classId == ids.class1)
+            entry1 = e.id;
+        if (e.courseId == ids.yuwen && e.classId == ids.class2)
+            entry2 = e.id;
+    }
+    QVERIFY(entry1 > 0 && entry2 > 0);
+
+    // 首条选入空组总是允许（确定组课程）
+    QVERIFY(combined.addEntry(gid, entry1).isEmpty());
+    // 课程不一致 → 阻止
+    const QString err1 = combined.addEntry(gid, entryMath);
+    QVERIFY(!err1.isEmpty());
+    QCOMPARE(combined.get(0, QStringLiteral("memberCount")).toInt(), 1);
+
+    // 同课同老师 → 正常选入
+    QVERIFY(combined.addEntry(gid, entry2).isEmpty());
+    QCOMPARE(combined.get(0, QStringLiteral("memberCount")).toInt(), 2);
+    QCOMPARE(combined.get(0, QStringLiteral("valid")).toBool(), true);
+    QCOMPARE(combined.get(0, QStringLiteral("teacherNames")).toString(), QStringLiteral("张"));
+    QCOMPARE(combined.unlinkedEntries().size(), 1); // 只剩数学那条
+
+    // 无共同老师 → 阻止：把 2班语文老师换成王，再验证 valid=false
+    for (auto &e : app.school()->planEntries) {
+        if (e.id == entry2)
+            e.teacherIds = {ids.tWang};
+    }
+    QCOMPARE(combined.get(0, QStringLiteral("valid")).toBool(), false);
+
+    // 移出 + 解散
+    combined.removeEntry(gid, ids.class2, ids.yuwen);
+    QCOMPARE(combined.get(0, QStringLiteral("memberCount")).toInt(), 1);
+    QVERIFY(combined.removeRow(0));
+    QCOMPARE(combined.count(), 0);
+    QCOMPARE(app.school()->planEntries.size(), 3); // 解散只解除关联，条目不删
+
+    // 无共同老师 → 阻止：数学组先收 1班（王老师），2班数学只有张老师
+    sched::PlanEntry e4;
+    e4.classId = ids.class2;
+    e4.courseId = ids.shuxue;
+    e4.teacherIds = {ids.tZhang};
+    e4.weeklyPeriods = 2;
+    e4.isCombined = true;
+    const qint64 entryMath2 = app.school()->addPlanEntry(e4);
+    const qint64 gid2 = combined.addGroup(QStringLiteral("数学合班"));
+    QVERIFY(combined.addEntry(gid2, entryMath).isEmpty());
+    QVERIFY(!combined.addEntry(gid2, entryMath2).isEmpty()); // 老师无交集被拒
+    QCOMPARE(combined.get(0, QStringLiteral("memberCount")).toInt(), 1); // 第一组已解散，数学组在 row 0
+}
+
+void TestApp::constraintsAndPreassign()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+
+    // 不排时间：创建→加 slot→去 slot→清空
+    QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 0);
+    app.setNoScheduleSlot(2, ids.tZhang, 0, true);
+    app.setNoScheduleSlot(2, ids.tZhang, 3, true);
+    QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 2);
+    QCOMPARE(app.school()->noScheduleConstraints.size(), 1);
+    app.setNoScheduleSlot(2, ids.tZhang, 0, false);
+    QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 1);
+    app.setNoScheduleSlot(2, ids.tZhang, 3, false);
+    QCOMPARE(app.school()->noScheduleConstraints.size(), 0); // 空约束自动删除
+    app.setNoScheduleSlot(0, ids.class1, 34, true);
+    app.clearNoSchedule(0, ids.class1);
+    QCOMPARE(app.noScheduleSlots(0, ids.class1).size(), 0);
+
+    // 预排：同班同 slot 唯一；toggle 往返
+    DutyModel duty(&app);
+    duty.setCurrentTeacherId(ids.tZhang);
+    duty.setDuty(ids.yuwen, {ids.class1}, 5);
+    QCOMPARE(app.planCourses(ids.class1).size(), 1);
+    app.togglePreAssignment(ids.class1, ids.yuwen, 10);
+    QCOMPARE(app.preAssignments(ids.class1).size(), 1);
+    app.togglePreAssignment(ids.class1, ids.shuxue, 10); // 覆盖式取消旧预排
+    QCOMPARE(app.preAssignments(ids.class1).size(), 0);
+    app.togglePreAssignment(ids.class1, ids.yuwen, 10);
+    app.togglePreAssignment(ids.class1, ids.shuxue, 10); // 同 slot → 先取消
+    QCOMPARE(app.preAssignments(ids.class1).size(), 0);
+
+    // 老师活动：toggle 往返
+    app.toggleTeacherActivity(ids.tZhang, 19, ids.yuwen);
+    QCOMPARE(app.teacherActivities(ids.tZhang).size(), 1);
+    QCOMPARE(app.teacherActivities(ids.tZhang).first().toMap().value(QStringLiteral("courseName")).toString(),
+             QStringLiteral("语文"));
+    app.toggleTeacherActivity(ids.tZhang, 19, ids.yuwen);
+    QCOMPARE(app.teacherActivities(ids.tZhang).size(), 0);
     QVERIFY(app.projectDirty());
 }
 

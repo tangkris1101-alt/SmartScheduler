@@ -1,14 +1,16 @@
 import QtQuick
 import QtQuick.Layouts
 
-// 数字步进器
+// 数字步进器（stepSize 支持小数，如 0.5 表示单双周）
 RowLayout {
     id: root
-    property int value: 0
-    property int from: 0
-    property int to: 99
+    property real value: 0
+    property real from: 0
+    property real to: 99
+    property real stepSize: 1
     property string suffix: ""
-    signal valueModified(int value)
+    property int decimals: stepSize < 1 ? 1 : 0
+    signal valueModified(real value)
 
     spacing: 0
 
@@ -31,7 +33,7 @@ RowLayout {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                root.value = Math.max(root.from, root.value - 1)
+                root.value = Math.max(root.from, root.value - root.stepSize)
                 root.valueModified(root.value)
             }
         }
@@ -40,10 +42,10 @@ RowLayout {
     Text {
         Layout.preferredWidth: valueText.implicitWidth + 20
         horizontalAlignment: Text.AlignHCenter
-        text: root.value + root.suffix
+        text: root.value.toFixed(root.decimals) + root.suffix
         color: Theme.text
         font.pixelSize: Theme.fontBody
-        Text { id: valueText; visible: false; text: root.to + root.suffix; font.pixelSize: Theme.fontBody }
+        Text { id: valueText; visible: false; text: root.to.toFixed(root.decimals) + root.suffix; font.pixelSize: Theme.fontBody }
     }
 
     Rectangle {
@@ -65,7 +67,7 @@ RowLayout {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                root.value = Math.min(root.to, root.value + 1)
+                root.value = Math.min(root.to, root.value + root.stepSize)
                 root.valueModified(root.value)
             }
         }

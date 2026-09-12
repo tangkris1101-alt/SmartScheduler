@@ -22,11 +22,14 @@ qt_add_qml_module(SmartScheduler
         ui/AppTextField.qml
         ui/PlaceholderPage.qml
         ui/RosterCell.qml
+        ui/TimetableGrid.qml
         ui/NewProjectDialog.qml
         ui/HomePage.qml
         ui/RosterPage.qml
         ui/GroupsPage.qml
         ui/CourseFeaturesPage.qml
+        ui/PlanEditorPage.qml
+        ui/LimitsPage.qml
 )
 
 target_link_libraries(SmartScheduler PRIVATE
