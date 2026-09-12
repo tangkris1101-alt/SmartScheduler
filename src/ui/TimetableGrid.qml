@@ -3,7 +3,8 @@ import QtQuick.Layouts
 
 // 可复用课表网格：行=节次、列=星期
 // cellState(day, period) → 0 正常 / 1 禁排(红叉) / 2 预排(锁) / 3 活动(橙)
-// cellText(day, period) → 单元格文字；revision 递增触发全部单元格重算
+// cellText/cellSubText/cellAccent/cellHighlight/cellTint/cellPayload 驱动内容与样式
+// editable=true 时单元格可拖拽（Drag 键 "course"），落下触发 dropRequested
 Item {
     id: grid
     property int days: app.daysPerWeek
@@ -14,10 +15,15 @@ Item {
     property var cellSubText: function (day, period) { return "" }    // 第二行小字（如老师名）
     property var cellAccent: function (day, period) { return false }  // 主课色条
     property var cellHighlight: function (day, period) { return false } // 分布高亮
+    property var cellTint: function (day, period) { return 0 }        // 调课目标：0无 1绿(可落子) 2黄(可对调) 3灰(禁止)
+    property var cellPayload: function (day, period) { return null }  // 拖拽载荷（如 {slot, half}）
     property int revision: 0
     property bool headerActions: false // 行列头点击整列/整行快捷设置
+    property bool editable: false      // 调课拖拽开关
 
     signal cellClicked(int day, int period)
+    signal cellRightClicked(int day, int period, real px, real py)
+    signal dropRequested(var fromPayload, int toSlot)
     signal dayHeaderClicked(int day)
     signal periodHeaderClicked(int period)
 
@@ -136,7 +142,7 @@ Item {
                             radius: Theme.radiusS
 
                             property int state: {
-                                grid.revision // 依赖：revision 变化时重算
+                                grid.revision
                                 return grid.cellState(index, periodRow.index)
                             }
                             property string label: {
@@ -155,10 +161,21 @@ Item {
                                 grid.revision
                                 return grid.cellHighlight(index, periodRow.index)
                             }
+                            property int tint: {
+                                grid.revision
+                                return grid.editable ? grid.cellTint(index, periodRow.index) : 0
+                            }
+                            property var payload: {
+                                grid.revision
+                                return grid.cellPayload(index, periodRow.index)
+                            }
 
                             color: state === 1 ? Qt.rgba(Theme.danger.r, Theme.danger.g, Theme.danger.b, 0.14)
                                  : state === 2 ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.14)
                                  : state === 3 ? Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.16)
+                                 : tint === 1 ? Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.22)
+                                 : tint === 2 ? Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.22)
+                                 : tint === 3 ? Theme.overlayPress
                                  : highlighted ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.10)
                                  : (cellHover.containsMouse ? Theme.overlayHover : "transparent")
                             border.color: highlighted ? Theme.primary
@@ -181,42 +198,98 @@ Item {
                                 color: Theme.primary
                             }
 
-                            Column {
-                                anchors.centerIn: parent
-                                width: parent.width - 8
-                                spacing: 0
-                                Text {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    width: parent.width
-                                    horizontalAlignment: Text.AlignHCenter
-                                    text: cell.state === 1 ? "✕"
-                                        : cell.state === 2 ? ("🔒 " + cell.label)
-                                        : cell.state === 3 ? ("◆ " + cell.label)
-                                        : cell.label
-                                    color: cell.state === 1 ? Theme.danger
-                                         : cell.state === 2 ? Theme.primary
-                                         : cell.state === 3 ? Theme.warning
-                                         : Theme.text
-                                    font.pixelSize: Theme.fontCaption
-                                    elide: Text.ElideRight
+                            // 可拖拽内容（editable 且本格有课时为拖拽源）
+                            Item {
+                                id: cellContent
+                                x: 0
+                                y: 0
+                                width: cell.width
+                                height: cell.height
+                                z: Drag.active ? 10 : 0
+
+                                property var srcPayload: cell.payload
+
+                                Drag.keys: ["course"]
+                                Drag.active: grid.editable && cell.payload !== null && cellHover.drag.active
+                                Drag.hotSpot.x: width / 2
+                                Drag.hotSpot.y: height / 2
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: Theme.radiusS
+                                    visible: cellContent.Drag.active
+                                    color: Theme.primary
+                                    opacity: 0.85
                                 }
-                                Text {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    width: parent.width
-                                    horizontalAlignment: Text.AlignHCenter
-                                    visible: text.length > 0
-                                    text: cell.subLabel
-                                    color: Theme.textSecondary
-                                    font.pixelSize: 10
-                                    elide: Text.ElideRight
+
+                                Column {
+                                    anchors.centerIn: parent
+                                    width: parent.width - 8
+                                    spacing: 0
+                                    Text {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: parent.width
+                                        horizontalAlignment: Text.AlignHCenter
+                                        text: cell.state === 1 ? "✕"
+                                            : cell.state === 2 ? ("🔒 " + cell.label)
+                                            : cell.state === 3 ? ("◆ " + cell.label)
+                                            : cell.label
+                                        color: cellContent.Drag.active ? Theme.onPrimary
+                                             : cell.state === 1 ? Theme.danger
+                                             : cell.state === 2 ? Theme.primary
+                                             : cell.state === 3 ? Theme.warning
+                                             : Theme.text
+                                        font.pixelSize: Theme.fontCaption
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: parent.width
+                                        horizontalAlignment: Text.AlignHCenter
+                                        visible: text.length > 0 && !cellContent.Drag.active
+                                        text: cell.subLabel
+                                        color: Theme.textSecondary
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
+                                    }
                                 }
                             }
+
+                            // 落下目标
+                            DropArea {
+                                anchors.fill: parent
+                                keys: ["course"]
+                                enabled: grid.editable
+                                onDropped: function (drop) {
+                                    const src = drop.source
+                                    if (src && src.srcPayload)
+                                        grid.dropRequested(src.srcPayload,
+                                                           grid.slotOf(index, periodRow.index))
+                                }
+                            }
+
                             MouseArea {
                                 id: cellHover
                                 anchors.fill: parent
                                 hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: grid.cellClicked(index, periodRow.index)
+                                cursorShape: grid.editable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                drag.target: grid.editable && cell.payload !== null ? cellContent : undefined
+                                onClicked: function (m) {
+                                    if (m.button === Qt.RightButton && grid.editable) {
+                                        const pos = mapToItem(grid, m.x, m.y)
+                                        grid.cellRightClicked(index, periodRow.index, pos.x, pos.y)
+                                    } else {
+                                        grid.cellClicked(index, periodRow.index)
+                                    }
+                                }
+                                onReleased: {
+                                    if (cellContent.Drag.active) {
+                                        cellContent.Drag.drop()
+                                        cellContent.x = 0
+                                        cellContent.y = 0
+                                    }
+                                }
                             }
                         }
                     }

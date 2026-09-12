@@ -2,6 +2,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 
+#include "AdjustController.h"
 #include "AppController.h"
 #include "CombinedModel.h"
 #include "GroupModel.h"
@@ -26,6 +27,7 @@ int main(int argc, char *argv[])
     PlanListModel planModel(&appController);
     DutyModel dutyModel(&appController);
     CombinedModel combinedModel(&appController);
+    AdjustController adjustController(&appController);
 
     QQmlApplicationEngine engine;
     QQmlContext *ctx = engine.rootContext();
@@ -39,6 +41,7 @@ int main(int argc, char *argv[])
     ctx->setContextProperty(QStringLiteral("planModel"), &planModel);
     ctx->setContextProperty(QStringLiteral("dutyModel"), &dutyModel);
     ctx->setContextProperty(QStringLiteral("combinedModel"), &combinedModel);
+    ctx->setContextProperty(QStringLiteral("adjust"), &adjustController);
 
     QObject::connect(
         &engine,

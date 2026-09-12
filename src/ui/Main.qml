@@ -79,6 +79,11 @@ ApplicationWindow {
         onThirdAction: Qt.quit()
     }
 
+    // 全局撤销/重做快捷键
+    Shortcut { sequence: "Ctrl+Z"; onActivated: adjust.undo() }
+    Shortcut { sequence: "Ctrl+Y"; onActivated: adjust.redo() }
+    Shortcut { sequence: "Ctrl+Shift+Z"; onActivated: adjust.redo() }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -164,6 +169,18 @@ ApplicationWindow {
                     }
                 }
 
+                AppButton {
+                    text: "↶"
+                    variant: "subtle"
+                    enabled: adjust.canUndo
+                    onClicked: adjust.undo()
+                }
+                AppButton {
+                    text: "↷"
+                    variant: "subtle"
+                    enabled: adjust.canRedo
+                    onClicked: adjust.redo()
+                }
                 AppButton {
                     text: qsTr("💾 保存")
                     variant: "subtle"

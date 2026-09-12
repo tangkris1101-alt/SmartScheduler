@@ -1,5 +1,7 @@
 # sched_app：QML 桥接层静态库（纯 Qt Core，不依赖 Qt Quick，便于单元测试）
 add_library(sched_app STATIC
+    AdjustController.cpp
+    AdjustController.h
     AppController.cpp
     AppController.h
     CombinedModel.cpp

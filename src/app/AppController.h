@@ -71,6 +71,7 @@ public:
     sched::School *school() { return &m_school; }
     const sched::School *school() const { return &m_school; }
     void markDirty(); // 编辑回写后调用：置脏并刷新统计
+    void notifyScheduleChanged() { Q_EMIT scheduleChanged(); } // 供调课命令回写后通知
 
     // ---- 限制条件（不排时间）：entityType 0=班级 1=课程 2=老师 3=教室 ----
     Q_INVOKABLE QVariantList noScheduleSlots(int entityType, qint64 entityId) const;
@@ -81,6 +82,7 @@ public:
     Q_INVOKABLE QVariantList preAssignments(qint64 classId) const; // [{courseId, courseName, slotIndex}]
     Q_INVOKABLE void togglePreAssignment(qint64 classId, qint64 courseId, int slot);
     Q_INVOKABLE QVariantList planCourses(qint64 classId) const;    // 该班计划内课程 [{id, name}]
+    Q_INVOKABLE QVariantList courseTeachers(qint64 classId, qint64 courseId) const; // 任课老师 id 列表
 
     // ---- 老师活动时间 ----
     Q_INVOKABLE QVariantList teacherActivities(qint64 teacherId) const; // [{slotIndex, courseId, courseName}]

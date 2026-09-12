@@ -275,6 +275,19 @@ QVariantList AppController::planCourses(qint64 classId) const
     return out;
 }
 
+QVariantList AppController::courseTeachers(qint64 classId, qint64 courseId) const
+{
+    QVariantList out;
+    for (const auto &e : m_school.planEntries) {
+        if (e.classId == classId && e.courseId == courseId) {
+            for (qint64 tid : e.teacherIds)
+                out.append(tid);
+            break;
+        }
+    }
+    return out;
+}
+
 QVariantList AppController::teacherActivities(qint64 teacherId) const
 {
     QVariantList out;

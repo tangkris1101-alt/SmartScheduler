@@ -1,3 +1,4 @@
+#include "AdjustController.h"
 #include "AppController.h"
 #include "CombinedModel.h"
 #include "GroupModel.h"
@@ -7,6 +8,7 @@
 #include <QTemporaryDir>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QGuiApplication>
 #include <QtTest/QTest>
 
 // 桥接层单元测试：项目生命周期、模型角色读写、过滤、级联删除、分组成员
@@ -30,6 +32,10 @@ private Q_SLOTS:
     void combinedModelValidation();
     void constraintsAndPreassign();
     void schedulerBridge();
+    void adjustRulesMatrix();
+    void adjustUndoRedo();
+    void unplacedAndClear();
+    void temporaryModeOps();
 };
 
 void TestApp::projectLifecycle()
@@ -516,6 +522,291 @@ void TestApp::schedulerBridge()
     QCOMPARE(app.assignmentsCount(), 20);
 }
 
-QTEST_GUILESS_MAIN(TestApp)
+// ---- 调课测试校例 ----
+struct AdjustIds {
+    qint64 class1, class2;
+    qint64 yuwen, shuxue, wuli, huaxue, shengwu, dili, tiyu;
+    qint64 tZhang, tWang, tLi, tChen, tZhao;
+    qint64 room;
+};
+
+static AdjustIds makeAdjustSchool(AppController &app)
+{
+    AdjustIds ids{};
+    app.newProject(QStringLiteral("调课校"), 5, 7, 4, 20);
+    auto *s = app.school();
+
+    sched::ClassInfo c1; c1.name = QStringLiteral("1班");
+    sched::ClassInfo c2; c2.name = QStringLiteral("2班");
+    ids.class1 = s->addClass(c1);
+    ids.class2 = s->addClass(c2);
+
+    auto addCourse = [&](const QString &name) {
+        sched::Course c; c.name = name; return s->addCourse(c);
+    };
+    ids.yuwen = addCourse(QStringLiteral("语文"));
+    ids.shuxue = addCourse(QStringLiteral("数学"));
+    ids.wuli = addCourse(QStringLiteral("物理"));
+    ids.huaxue = addCourse(QStringLiteral("化学"));
+    ids.shengwu = addCourse(QStringLiteral("生物"));
+    ids.dili = addCourse(QStringLiteral("地理"));
+    ids.tiyu = addCourse(QStringLiteral("体育"));
+
+    sched::Teacher tz; tz.name = QStringLiteral("张");
+    sched::Teacher tw; tw.name = QStringLiteral("王");
+    sched::Teacher tl; tl.name = QStringLiteral("李");
+    sched::Teacher tc; tc.name = QStringLiteral("陈");
+    sched::Teacher tzh; tzh.name = QStringLiteral("赵");
+    ids.tZhang = s->addTeacher(tz);
+    ids.tWang = s->addTeacher(tw);
+    ids.tLi = s->addTeacher(tl);
+    ids.tChen = s->addTeacher(tc);
+    ids.tZhao = s->addTeacher(tzh);
+
+    sched::Classroom lab; lab.name = QStringLiteral("实验室"); lab.capacity = 1;
+    ids.room = s->addClassroom(lab);
+
+    auto plan = [&](qint64 cls, qint64 course, qint64 teacher, double periods, qint64 room = -1,
+                    bool combined = false) {
+        sched::PlanEntry e;
+        e.classId = cls; e.courseId = course; e.teacherIds = {teacher};
+        e.weeklyPeriods = periods; e.classroomId = room; e.isCombined = combined;
+        return s->addPlanEntry(e);
+    };
+    plan(ids.class1, ids.yuwen, ids.tZhang, 5);
+    plan(ids.class2, ids.yuwen, ids.tZhang, 5);
+    plan(ids.class1, ids.shuxue, ids.tWang, 5);
+    plan(ids.class1, ids.wuli, ids.tLi, 2, ids.room);
+    plan(ids.class2, ids.wuli, ids.tZhao, 2, ids.room); // 2班物理换赵老师，隔离容量校验
+    plan(ids.class1, ids.huaxue, ids.tWang, 2.5);
+    plan(ids.class1, ids.shengwu, ids.tWang, 2);
+    plan(ids.class1, ids.dili, ids.tWang, 2);
+    plan(ids.class1, ids.tiyu, ids.tChen, 2, -1, true);
+    plan(ids.class2, ids.tiyu, ids.tChen, 2, -1, true);
+
+    sched::CombinedGroup cg;
+    cg.name = QStringLiteral("体育合班");
+    cg.entries = {{ids.class1, ids.tiyu}, {ids.class2, ids.tiyu}};
+    s->addCombinedGroup(cg);
+
+    // 不排：1班 slot34
+    sched::NoScheduleConstraint ns;
+    ns.entityType = sched::NoScheduleConstraint::EntityType::Class;
+    ns.entityId = ids.class1;
+    ns.slots = {34};
+    s->addNoScheduleConstraint(ns);
+
+    // 预排：1班语文 slot10
+    sched::PreAssignment pre;
+    pre.classId = ids.class1; pre.courseId = ids.yuwen; pre.slotIndex = 10;
+    s->addPreAssignment(pre);
+
+    // 初始课表
+    auto put = [&](qint64 cls, int slot, int half, qint64 course) {
+        s->schedule.setAssignment(cls, slot, half, course);
+    };
+    put(ids.class1, 10, 0, ids.yuwen);  // 预排
+    put(ids.class1, 0, 0, ids.shuxue);
+    put(ids.class2, 0, 0, ids.yuwen);   // 张 slot0
+    put(ids.class1, 5, 0, ids.wuli);    // 李 + 实验室 slot5
+    put(ids.class2, 6, 0, ids.wuli);    // 李 + 实验室 slot6
+    put(ids.class1, 15, 1, ids.huaxue); // 化学 单周
+    put(ids.class1, 17, 0, ids.shengwu);
+    put(ids.class1, 18, 1, ids.dili);   // 地理 单周
+    put(ids.class1, 20, 0, ids.tiyu);   // 体育合班
+    put(ids.class2, 20, 0, ids.tiyu);
+    return ids;
+}
+
+void TestApp::adjustRulesMatrix()
+{
+    AppController app;
+    const AdjustIds ids = makeAdjustSchool(app);
+    AdjustController adjust(&app);
+    auto ok = [](const QVariantMap &r) { return r.value(QStringLiteral("ok")).toBool(); };
+    auto reason = [](const QVariantMap &r) { return r.value(QStringLiteral("reason")).toString(); };
+
+    // 1. 合法移动：2班语文 slot0 → slot1
+    QVERIFY(ok(adjust.moveCell(ids.class2, 0, 0, 1, 0)));
+    QCOMPARE(app.school()->schedule.courseAt(ids.class2, 1, 0).value_or(-1), ids.yuwen);
+
+    // 2. 老师冲突：2班语文（张）移到 slot10（张在 1班上语文）→ 拒
+    const QVariantMap r2 = adjust.moveCell(ids.class2, 1, 0, 10, 0);
+    QVERIFY(!ok(r2));
+    QVERIFY(reason(r2).contains(QStringLiteral("张")));
+
+    // 3. 教室容量：2班物理 slot6 → slot5（实验室容量 1 已被 1班占）→ 拒
+    const QVariantMap r3 = adjust.moveCell(ids.class2, 6, 0, 5, 0);
+    QVERIFY(!ok(r3));
+    QVERIFY(reason(r3).contains(QStringLiteral("容量")));
+
+    // 4. 不排时间：1班数学 slot0 → slot34（班级不排）→ 拒
+    QVERIFY(!ok(adjust.moveCell(ids.class1, 0, 0, 34, 0)));
+
+    // 5. 预排锁定：移走预排课 → 拒；别的课移到预排格 → 拒
+    QVERIFY(!ok(adjust.moveCell(ids.class1, 10, 0, 11, 0)));
+    QVERIFY(!ok(adjust.moveCell(ids.class1, 0, 0, 10, 0)));
+
+    // 6. half 匹配：整节 → 含单周格的格子 拒；单周 → 空格 可；单周 ↔ 整节格 拒；单周 ↔ 单周 可对调
+    QVERIFY(!ok(adjust.moveCell(ids.class1, 0, 0, 15, 0)));   // 整节数学 → 化学(单)格
+    QVERIFY(ok(adjust.moveCell(ids.class1, 15, 1, 16, 1)));   // 化学(单) → 空格
+    QVERIFY(!ok(adjust.moveCell(ids.class1, 16, 1, 17, 1)));  // 化学(单) → 生物(整)格
+    QVERIFY(ok(adjust.moveCell(ids.class1, 16, 1, 18, 1)));   // 化学(单) ↔ 地理(单) 对调
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 18, 1).value_or(-1), ids.huaxue);
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 16, 1).value_or(-1), ids.dili);
+
+    // 7. 合班联动：1班体育 slot20 → slot21，两班一起动
+    QVERIFY(ok(adjust.moveCell(ids.class1, 20, 0, 21, 0)));
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 21, 0).value_or(-1), ids.tiyu);
+    QCOMPARE(app.school()->schedule.courseAt(ids.class2, 21, 0).value_or(-1), ids.tiyu);
+    QVERIFY(!app.school()->schedule.courseAt(ids.class1, 20, 0).has_value());
+    QVERIFY(!app.school()->schedule.courseAt(ids.class2, 20, 0).has_value());
+    // 合班课对调 → 拒
+    QVERIFY(!ok(adjust.moveCell(ids.class1, 21, 0, 0, 0)));
+
+    // 8. targetsFor：对 1班数学(slot0) 计算目标表
+    // 注意此时 化学已与地理对调：slot16=地理(单周)、slot18=化学(单周)、slot15 已空
+    const QVariantList targets = adjust.targetsFor(ids.class1, 0, 0);
+    QCOMPARE(targets.size(), 35);
+    QCOMPARE(targets[10].toInt(), 0);  // 预排格禁
+    QCOMPARE(targets[34].toInt(), 0);  // 不排格禁
+    QCOMPARE(targets[16].toInt(), 0);  // 单周格与整节不兼容
+    QCOMPARE(targets[5].toInt(), 2);   // 物理格可对调（王/李无冲突）
+    QCOMPARE(targets[1].toInt(), 1);   // 空格可落子
+}
+
+void TestApp::adjustUndoRedo()
+{
+    AppController app;
+    const AdjustIds ids = makeAdjustSchool(app);
+    AdjustController adjust(&app);
+    auto assigns = [&] { return app.school()->schedule.assignments; };
+
+    const auto before = assigns();
+    QVERIFY(adjust.moveCell(ids.class1, 0, 0, 1, 0).value(QStringLiteral("ok")).toBool());
+    QVERIFY(assigns() != before);
+    QVERIFY(adjust.canUndo());
+    QCOMPARE(adjust.undoText(), QStringLiteral("移动课程"));
+
+    adjust.undo();
+    QCOMPARE(assigns(), before); // 撤销完整还原
+    QVERIFY(adjust.canRedo());
+    adjust.redo();
+    QCOMPARE(assigns().size(), before.size());
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 1, 0).value_or(-1), ids.shuxue);
+
+    // 对调 + 撤销
+    const auto before2 = assigns();
+    QVERIFY(adjust.moveCell(ids.class1, 1, 0, 5, 0).value(QStringLiteral("ok")).toBool());
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 5, 0).value_or(-1), ids.shuxue);
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 1, 0).value_or(-1), ids.wuli);
+    adjust.undo();
+    QCOMPARE(assigns(), before2);
+
+    // 清除课程 + 撤销
+    QVERIFY(adjust.unscheduleCell(ids.class1, 5, 0).value(QStringLiteral("ok")).toBool());
+    QVERIFY(!app.school()->schedule.courseAt(ids.class1, 5, 0).has_value());
+    adjust.undo();
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 5, 0).value_or(-1), ids.wuli);
+}
+
+void TestApp::unplacedAndClear()
+{
+    AppController app;
+    app.newProject(QStringLiteral("未排校"), 5, 7, 4, 20);
+    auto *s = app.school();
+    sched::ClassInfo c1; c1.name = QStringLiteral("1班");
+    const qint64 class1 = s->addClass(c1);
+    sched::Course yw; yw.name = QStringLiteral("语文");
+    const qint64 yuwen = s->addCourse(yw);
+    sched::PlanEntry e; e.classId = class1; e.courseId = yuwen; e.weeklyPeriods = 5;
+    s->addPlanEntry(e);
+    // 已排 3 节
+    s->schedule.setAssignment(class1, 0, 0, yuwen);
+    s->schedule.setAssignment(class1, 7, 0, yuwen);
+    s->schedule.setAssignment(class1, 14, 0, yuwen);
+
+    AdjustController adjust(&app);
+    const QVariantList unplaced = adjust.unplacedCourses(class1);
+    QCOMPARE(unplaced.size(), 1);
+    QCOMPARE(unplaced.first().toMap().value(QStringLiteral("missing")).toDouble(), 2.0);
+
+    // 安排 1 节 → 缺 1；排满后再排 → 拒
+    QVERIFY(adjust.placeUnplaced(class1, yuwen, 1, 0).value(QStringLiteral("ok")).toBool());
+    QCOMPARE(adjust.unplacedCourses(class1).first().toMap().value(QStringLiteral("missing")).toDouble(),
+             1.0);
+    QVERIFY(adjust.placeUnplaced(class1, yuwen, 2, 0).value(QStringLiteral("ok")).toBool());
+    QVERIFY(adjust.unplacedCourses(class1).isEmpty());
+    const QVariantMap over = adjust.placeUnplaced(class1, yuwen, 3, 0);
+    QVERIFY(!over.value(QStringLiteral("ok")).toBool());
+    QVERIFY(over.value(QStringLiteral("reason")).toString().contains(QStringLiteral("已排满")));
+
+    // 清除一节 → 缺 1；撤销恢复
+    QVERIFY(adjust.unscheduleCell(class1, 2, 0).value(QStringLiteral("ok")).toBool());
+    QCOMPARE(adjust.unplacedCourses(class1).first().toMap().value(QStringLiteral("missing")).toDouble(),
+             1.0);
+    adjust.undo();
+    QVERIFY(adjust.unplacedCourses(class1).isEmpty());
+}
+
+void TestApp::temporaryModeOps()
+{
+    AppController app;
+    app.newProject(QStringLiteral("临时校"), 5, 7, 4, 20);
+    auto *s = app.school();
+    sched::ClassInfo c1; c1.name = QStringLiteral("3班");
+    const qint64 class3 = s->addClass(c1);
+    sched::Course yw; yw.name = QStringLiteral("语文");
+    const qint64 yuwen = s->addCourse(yw);
+    sched::PlanEntry e; e.classId = class3; e.courseId = yuwen; e.weeklyPeriods = 1;
+    s->addPlanEntry(e);
+    s->schedule.setAssignment(class3, 0, 0, yuwen);
+
+    // 先落盘清脏，验证临时调课不污染正式课表
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(app.saveProjectAs(dir.filePath(QStringLiteral("t.spk"))));
+    QVERIFY(!app.projectDirty());
+    const auto snapshot = s->schedule.assignments;
+
+    AdjustController adjust(&app);
+    adjust.enterTemporary();
+    QVERIFY(adjust.temporaryMode());
+
+    // 超出计划节数任意安排：语文计划只 1 节，临时再加一节
+    const QVariantMap r = adjust.placeUnplaced(class3, yuwen, 5, 0);
+    QVERIFY2(r.value(QStringLiteral("ok")).toBool(), qPrintable(r.value(QStringLiteral("reason")).toString()));
+    QCOMPARE(s->schedule.assignments.size(), snapshot.size() + 1);
+    QVERIFY(!app.projectDirty()); // 临时改动不置脏
+
+    // 调课通知文本包含班级与变化
+    const QString notice = adjust.tempNoticeText();
+    QVERIFY(notice.contains(QStringLiteral("3班")));
+    QVERIFY(notice.contains(QStringLiteral("语文")));
+
+    // 导出 txt
+    QVERIFY(adjust.exportTempNotice(dir.filePath(QStringLiteral("notice.txt"))));
+    QVERIFY(QFile::exists(dir.filePath(QStringLiteral("notice.txt"))));
+    // 导出 pdf（headless 缺字体时跳过）
+    if (!adjust.exportTempNotice(dir.filePath(QStringLiteral("notice.pdf"))))
+        QSKIP("当前环境不支持 PDF 导出");
+    QVERIFY(QFile::exists(dir.filePath(QStringLiteral("notice.pdf"))));
+
+    // 退出即丢弃
+    adjust.exitTemporary();
+    QVERIFY(!adjust.temporaryMode());
+    QCOMPARE(s->schedule.assignments, snapshot);
+    QVERIFY(!app.projectDirty());
+}
+
+// QPdfWriter/QFontDatabase 需要 QGuiApplication；headless 用 minimal 平台
+int main(int argc, char *argv[])
+{
+    qputenv("QT_QPA_PLATFORM", "minimal");
+    QGuiApplication app(argc, argv);
+    TestApp tc;
+    QTEST_SET_MAIN_SOURCE_PATH
+    return QTest::qExec(&tc, argc, argv);
+}
 
 #include "tst_app.moc"
