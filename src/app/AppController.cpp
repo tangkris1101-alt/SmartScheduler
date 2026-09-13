@@ -1089,13 +1089,15 @@ void AppController::checkUpdate()
     m_updateMessage.clear();
     Q_EMIT updateStatusChanged();
 
-    // 国内直连 GitHub 不稳定：优先 jsDelivr 国内 CDN 上的 version.json（发布流水线每次发版写入），
-    // 其次 GitHub API 直连，最后公益反代；任一通道失败自动回退下一个
+    // 国内直连 GitHub 不稳定：优先公益反代拉取公开仓的 version.json（实时无缓存、国内可达，
+    // 发布流水线每次发版写入）；其次 GitHub API 直连；最后 jsDelivr CDN（有缓存，兜底用）。
+    // 任一通道失败/超时自动回退下一个
     m_updateSources = {
-        QStringLiteral("https://cdn.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json"),
-        QStringLiteral("https://fastly.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json"),
+        QStringLiteral("https://ghfast.top/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json"),
+        QStringLiteral("https://gh-proxy.com/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json"),
+        QStringLiteral("https://ghproxy.net/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json"),
         QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest"),
-        QStringLiteral("https://mirror.ghproxy.com/https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest"),
+        QStringLiteral("https://cdn.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json"),
     };
     m_updateAttempt = 0;
     tryUpdateSource();
@@ -1105,7 +1107,7 @@ void AppController::tryUpdateSource()
 {
     if (m_updateAttempt >= m_updateSources.size()) {
         m_updateStatus = 4;
-        m_updateMessage = tr("自动检查失败（已依次尝试国内 CDN、GitHub 直连、镜像代理），"
+        m_updateMessage = tr("自动检查失败（已依次尝试镜像加速、GitHub 直连、国内 CDN），"
                              "请检查网络后重试，或打开发布页查看。");
         Q_EMIT updateStatusChanged();
         return;
