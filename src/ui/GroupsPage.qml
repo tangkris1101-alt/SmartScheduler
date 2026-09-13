@@ -5,6 +5,7 @@ import QtQuick.Layouts
 // 归类分组页：名单 CRUD + 成员勾选
 Item {
     id: root
+    objectName: "groupsPage"
     property int selectedRow: -1
     property string memberFilter: ""
     property var candidateList: []
@@ -49,6 +50,7 @@ Item {
                     spacing: Theme.spacingS
                     AppComboBox {
                         id: typeCombo
+                        objectName: "typeCombo"
                         Layout.fillWidth: true
                         model: root.typeOptions
                         currentIndex: 0
@@ -76,6 +78,7 @@ Item {
 
                     delegate: Rectangle {
                         id: gRow
+                        objectName: "groupRow"
                         required property int index
                         required property string name
                         required property string typeName
@@ -191,6 +194,7 @@ Item {
 
                 ListView {
                     id: memberList
+                    objectName: "memberList"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
@@ -223,6 +227,7 @@ Item {
                                 font.pixelSize: Theme.fontBody
                             }
                             AppSwitch {
+                                objectName: "memberSwitch"
                                 checked: groupModel.isMember(root.selectedGroupId(), mRow.modelData.id)
                                 onToggled: {
                                     groupModel.toggleMember(root.selectedGroupId(), mRow.modelData.id)

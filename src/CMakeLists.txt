@@ -49,6 +49,7 @@ target_link_libraries(SmartScheduler PRIVATE
     Qt6::QuickControls2
     Qt6::Sql
     Qt6::PrintSupport
+    Qt6::Test
     sched_core
     sched_data
     sched_engine

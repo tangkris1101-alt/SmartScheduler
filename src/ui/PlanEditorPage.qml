@@ -1058,7 +1058,7 @@ Item {
                         anchors.leftMargin: Theme.spacingS; anchors.rightMargin: Theme.spacingS
                         Text {
                             Layout.fillWidth: true
-                            text: classModel.get(cpRow.index, "name")
+                            text: String(classModel.get(cpRow.index, "name") ?? "")
                             color: Theme.text; font.pixelSize: Theme.fontBody
                         }
                         AppSwitch {
@@ -1177,7 +1177,7 @@ Item {
                         anchors.leftMargin: Theme.spacingS; anchors.rightMargin: Theme.spacingS
                         Text {
                             Layout.fillWidth: true
-                            text: classModel.get(dcRow.index, "name")
+                            text: String(classModel.get(dcRow.index, "name") ?? "")
                             color: Theme.text; font.pixelSize: Theme.fontBody
                         }
                         AppSwitch {

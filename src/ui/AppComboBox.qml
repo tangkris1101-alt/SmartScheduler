@@ -19,7 +19,8 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         anchors.left: parent.left
         anchors.leftMargin: Theme.spacingM
-        text: root.model.length > root.currentIndex ? root.model[root.currentIndex] : ""
+        text: (root.currentIndex >= 0 && root.currentIndex < root.model.length)
+              ? String(root.model[root.currentIndex] ?? "") : ""
         color: Theme.text
         font.pixelSize: Theme.fontBody
     }
@@ -68,6 +69,7 @@ Rectangle {
             model: root.model
             delegate: Rectangle {
                 id: opt
+                objectName: "comboOption"
                 required property int index
                 required property string modelData
                 width: list.width
@@ -89,6 +91,8 @@ Rectangle {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
+                        // 与原生 ComboBox 一致：点击选项即更新 currentIndex 再发信号
+                        root.currentIndex = opt.index
                         root.activated(opt.index)
                         popup.close()
                     }

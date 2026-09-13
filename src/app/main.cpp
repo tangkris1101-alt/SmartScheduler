@@ -8,8 +8,10 @@
 #include <QMutexLocker>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QStandardPaths>
+#include <QTest>
 #include <QTextStream>
 #include <QTimer>
 
@@ -116,6 +118,13 @@ int main(int argc, char *argv[])
         &app,
         []() { QCoreApplication::exit(-1); },
         Qt::QueuedConnection);
+    // 冒烟自检模式：抑制新手引导弹窗，避免模态对话框吃掉注入的点击
+    const bool smokeMode = std::any_of(app.arguments().cbegin(), app.arguments().cend(),
+                                       [](const QString &a) {
+                                           return a.startsWith(QStringLiteral("--smoke="));
+                                       });
+    if (smokeMode)
+        appController.setOnboardingShown(true);
     engine.loadFromModule(QStringLiteral("SmartScheduler"), QStringLiteral("Main"));
 
     // 自检用：--screenshot=<file> 启动 2.5s 后抓取主窗口截图并退出（配合 QT_QPA_PLATFORM=offscreen）
@@ -203,6 +212,160 @@ int main(int argc, char *argv[])
                 ++(*page);
             });
             timer->start(150);
+        });
+    }
+
+    // 回归自检：--smoke=groups 走「归类分组页选名单 → 真实点击成员开关 → 点击类型下拉选第二项」
+    // 的完整鼠标路径；0 通过，7=建组失败，8=页面/候选异常，9=成员勾选无效，10=下拉自更新无效
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("groups")) {
+        // Repeater/Loader 创建的项只在可视化 Item 树里，QObject::children() 找不到 → childItems 递归
+        auto findAllItems = [](QQuickItem *root, const QString &name, QList<QQuickItem *> &out,
+                               auto &&self) -> void {
+            if (!root)
+                return;
+            if (root->objectName() == name)
+                out.append(root);
+            const auto items = root->childItems();
+            for (auto *c : items)
+                self(c, name, out, self);
+        };
+        QTimer::singleShot(1200, &app, [&appController, &groupModel, &app, findAllItems]() mutable {
+            appController.createSampleSchool(false); // 6 班 / 11 课 / 14 师
+            const qint64 gid = groupModel.addGroup(0, QStringLiteral("测试年级"));
+            if (gid < 0) {
+                qWarning("smoke-groups: addGroup 失败");
+                app.exit(7);
+                return;
+            }
+            // 找带 currentPage 属性的主窗口（offscreen 下可能有多个窗口）
+            QQuickWindow *w = nullptr;
+            const auto windows = QGuiApplication::allWindows();
+            for (auto *win : windows) {
+                auto *qw = qobject_cast<QQuickWindow *>(win);
+                if (qw && qw->property("currentPage").isValid())
+                    w = qw;
+            }
+            if (!w) {
+                app.exit(6);
+                return;
+            }
+            w->setProperty("currentPage", 2); // 归类分组
+            QTimer::singleShot(700, &app, [&app, &groupModel, w, gid, findAllItems]() mutable {
+                QList<QQuickItem *> pages;
+                findAllItems(w->contentItem(), QStringLiteral("groupsPage"), pages, findAllItems);
+                if (pages.isEmpty()) {
+                    qWarning("smoke-groups: 未找到 groupsPage");
+                    app.exit(8);
+                    return;
+                }
+                QQuickItem *page = pages.first();
+                // 探针 1：真实点击左侧分组行，验证鼠标事件投递链路本身是否工作
+                QList<QQuickItem *> rows;
+                findAllItems(page, QStringLiteral("groupRow"), rows, findAllItems);
+                if (rows.isEmpty()) {
+                    qWarning("smoke-groups: 未找到 groupRow");
+                    app.exit(8);
+                    return;
+                }
+                const QPoint rpos =
+                    rows.first()->mapToScene(QPointF(rows.first()->width() / 2,
+                                                     rows.first()->height() / 2)).toPoint();
+                QTest::mouseClick(w, Qt::LeftButton, Qt::NoModifier, rpos);
+                QTimer::singleShot(400, &app,
+                                   [&app, &groupModel, w, page, gid, findAllItems]() mutable {
+                    const int sel = page->property("selectedRow").toInt();
+                    qWarning("smoke-groups: 点击分组行后 selectedRow=%d", sel);
+                    if (sel != 0) {
+                        qWarning("smoke-groups: 分组行点击无效 —— 事件投递链路不通");
+                        app.exit(8);
+                        return;
+                    }
+                    const QVariantList cands = groupModel.candidates(gid);
+                    QList<QQuickItem *> switches;
+                    findAllItems(page, QStringLiteral("memberSwitch"), switches, findAllItems);
+                    qWarning("smoke-groups: 候选=%lld 开关=%lld", (long long)cands.size(),
+                             (long long)switches.size());
+                    if (cands.size() != 6 || switches.isEmpty()) {
+                        app.exit(8);
+                        return;
+                    }
+                    // 注意：selectedRow=0 是示例学校自带的年级组（已含全部班级），
+                    // 校验「点击后成员状态翻转」而非固定为 true
+                    const qint64 selGid = groupModel.idAt(0);
+                    const qint64 firstId =
+                        cands.first().toMap().value(QStringLiteral("id")).toLongLong();
+                    const bool wasMember = groupModel.isMember(selGid, firstId);
+                    auto *sw = switches.first();
+                    const QPoint pos =
+                        sw->mapToScene(QPointF(sw->width() / 2, sw->height() / 2)).toPoint();
+                    qWarning("smoke-groups: 点击开关 scene(%d,%d)", pos.x(), pos.y());
+                    QTest::mouseClick(w, Qt::LeftButton, Qt::NoModifier, pos);
+                    QTimer::singleShot(
+                        500, &app,
+                        [&app, &groupModel, w, page, selGid, firstId, wasMember,
+                         findAllItems]() mutable {
+                            if (groupModel.isMember(selGid, firstId) == wasMember) {
+                                qWarning("smoke-groups: 点击后成员状态未翻转 —— 勾选路径不通");
+                                app.exit(9);
+                                return;
+                            }
+                            qWarning("smoke-groups: 成员勾选 OK");
+                            // 第二步：验证下拉弹窗点击后 currentIndex 自更新
+                            QList<QQuickItem *> combos;
+                            findAllItems(page, QStringLiteral("typeCombo"), combos, findAllItems);
+                            if (combos.isEmpty()) {
+                                app.exit(10);
+                                return;
+                            }
+                            auto *combo = combos.first();
+                            const QPoint cpos =
+                                combo->mapToScene(QPointF(combo->width() / 2, combo->height() / 2))
+                                    .toPoint();
+                            QTest::mouseClick(w, Qt::LeftButton, Qt::NoModifier, cpos);
+                            QTimer::singleShot(500, &app,
+                                               [&app, w, page, findAllItems]() mutable {
+                                // 弹窗选项挂在 Overlay 下；其它下拉弹窗关闭、委托不可见
+                                QList<QQuickItem *> opts;
+                                findAllItems(w->contentItem(), QStringLiteral("comboOption"), opts,
+                                             findAllItems);
+                                QQuickItem *target = nullptr;
+                                int visibleCount = 0;
+                                for (auto *o : opts) {
+                                    if (!o->isVisible())
+                                        continue;
+                                    ++visibleCount;
+                                    if (o->property("index").toInt() == 1)
+                                        target = o;
+                                }
+                                qWarning("smoke-groups: 可见下拉选项=%lld",
+                                         (long long)visibleCount);
+                                if (!target) {
+                                    qWarning("smoke-groups: 弹窗未打开或缺少第 2 项");
+                                    app.exit(10);
+                                    return;
+                                }
+                                const QPoint tpos =
+                                    target
+                                        ->mapToScene(QPointF(target->width() / 2,
+                                                             target->height() / 2))
+                                        .toPoint();
+                                QTest::mouseClick(w, Qt::LeftButton, Qt::NoModifier, tpos);
+                                QTimer::singleShot(400, &app, [&app, page, findAllItems]() mutable {
+                                    QList<QQuickItem *> combos2;
+                                    findAllItems(page, QStringLiteral("typeCombo"), combos2,
+                                                 findAllItems);
+                                    const int idx = combos2.isEmpty()
+                                                        ? -1
+                                                        : combos2.first()
+                                                              ->property("currentIndex")
+                                                              .toInt();
+                                    qWarning("smoke-groups: 选项点击后 currentIndex=%d", idx);
+                                    app.exit(idx == 1 ? 0 : 10);
+                                });
+                                               });
+                        });
+                                   });
+            });
         });
     }
 
