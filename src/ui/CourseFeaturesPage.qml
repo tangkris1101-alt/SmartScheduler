@@ -180,7 +180,8 @@ Item {
                     RowLayout {
                         AppSwitch {
                             id: majorSwitch
-                            onToggled: courseModel.set(root.selectedRow, "isMajor", checked)
+                            onToggled: { majorSwitch.checked = checked
+                                courseModel.set(root.selectedRow, "isMajor", checked) }
                         }
                         Text { text: qsTr("优先排上午黄金时段"); color: Theme.textSecondary; font.pixelSize: Theme.fontCaption }
                         Item { Layout.fillWidth: true }
@@ -190,7 +191,8 @@ Item {
                     RowLayout {
                         AppSwitch {
                             id: scienceSwitch
-                            onToggled: courseModel.set(root.selectedRow, "isScience", checked)
+                            onToggled: { scienceSwitch.checked = checked
+                                courseModel.set(root.selectedRow, "isScience", checked) }
                         }
                         Text { text: qsTr("用于文理搭配分布"); color: Theme.textSecondary; font.pixelSize: Theme.fontCaption }
                         Item { Layout.fillWidth: true }
@@ -200,7 +202,8 @@ Item {
                     RowLayout {
                         AppSwitch {
                             id: spreadSwitch
-                            onToggled: courseModel.set(root.selectedRow, "evenSpread", checked)
+                            onToggled: { spreadSwitch.checked = checked
+                                courseModel.set(root.selectedRow, "evenSpread", checked) }
                         }
                         Text { text: qsTr("同一节次全校尽量少班同上"); color: Theme.textSecondary; font.pixelSize: Theme.fontCaption }
                         Item { Layout.fillWidth: true }
@@ -236,8 +239,9 @@ Item {
                         Text { text: qsTr("不限"); color: Theme.text; font.pixelSize: Theme.fontBody }
                         AppSwitch {
                             id: unlimitedSwitch
-                            onToggled: teacherModel.set(root.selectedRow, "maxPeriodsPerDay",
-                                                        checked ? -1 : maxStepper.value)
+                            onToggled: { unlimitedSwitch.checked = checked
+                                teacherModel.set(root.selectedRow, "maxPeriodsPerDay",
+                                                 checked ? -1 : maxStepper.value) }
                         }
                         AppStepper {
                             id: maxStepper

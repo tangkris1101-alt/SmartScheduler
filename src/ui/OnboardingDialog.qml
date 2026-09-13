@@ -61,7 +61,11 @@ Popup {
             Repeater {
                 model: root.pages.length
                 delegate: Item {
+                    id: pageItem
                     required property int index
+                    // 注意：子项里 parent 是 ColumnLayout，必须用 pageItem 取 index，
+                    // 否则 root.pages[undefined] 静默为空白
+                    readonly property var pageData: root.pages[pageItem.index]
                     opacity: StackLayout.isCurrentItem ? 1 : 0
                     Behavior on opacity { NumberAnimation { duration: 160 } }
 
@@ -72,12 +76,12 @@ Popup {
 
                         Text {
                             Layout.alignment: Qt.AlignHCenter
-                            text: root.pages[parent.index].icon
+                            text: pageItem.pageData.icon
                             font.pixelSize: 52
                         }
                         Text {
                             Layout.alignment: Qt.AlignHCenter
-                            text: root.pages[parent.index].title
+                            text: pageItem.pageData.title
                             font.pixelSize: Theme.fontTitle
                             font.bold: true
                             color: Theme.text
@@ -86,7 +90,7 @@ Popup {
                             Layout.alignment: Qt.AlignHCenter
                             Layout.fillWidth: true
                             horizontalAlignment: Text.AlignHCenter
-                            text: root.pages[parent.index].body
+                            text: pageItem.pageData.body
                             font.pixelSize: Theme.fontBody
                             color: Theme.textSecondary
                             wrapMode: Text.WordWrap
@@ -122,6 +126,7 @@ Popup {
                 AppSwitch {
                     id: noMoreSwitch
                     checked: true
+                    onToggled: noMoreSwitch.checked = checked
                 }
                 Text {
                     text: qsTr("不再显示")
@@ -130,7 +135,7 @@ Popup {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: noMoreSwitch.toggled(!noMoreSwitch.checked)
+                        onClicked: noMoreSwitch.checked = !noMoreSwitch.checked
                     }
                 }
             }

@@ -297,19 +297,19 @@ Item {
                             AppSwitch {
                                 id: showTeachersSwitch
                                 checked: true
-                                onToggled: root.persistOptions()
+                                onToggled: { showTeachersSwitch.checked = checked; root.persistOptions() }
                             }
                             Text { text: qsTr("午休分隔行"); color: Theme.text; font.pixelSize: Theme.fontBody }
                             AppSwitch {
                                 id: lunchSwitch
                                 checked: true
-                                onToggled: root.persistOptions()
+                                onToggled: { lunchSwitch.checked = checked; root.persistOptions() }
                             }
                             Text { text: qsTr("预排锁定标记"); color: Theme.text; font.pixelSize: Theme.fontBody }
                             AppSwitch {
                                 id: lockSwitch
                                 checked: true
-                                onToggled: root.persistOptions()
+                                onToggled: { lockSwitch.checked = checked; root.persistOptions() }
                             }
                         }
 

@@ -1,6 +1,11 @@
 #include <QGuiApplication>
+#include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickWindow>
+#include <QTimer>
+
+#include <algorithm>
 
 #include "AdjustController.h"
 #include "AppController.h"
@@ -53,6 +58,27 @@ int main(int argc, char *argv[])
         []() { QCoreApplication::exit(-1); },
         Qt::QueuedConnection);
     engine.loadFromModule(QStringLiteral("SmartScheduler"), QStringLiteral("Main"));
+
+    // 自检用：--screenshot=<file> 启动 2.5s 后抓取主窗口截图并退出（配合 QT_QPA_PLATFORM=offscreen）
+    const QStringList args = app.arguments();
+    const auto shotIt = std::find_if(args.cbegin(), args.cend(), [](const QString &a) {
+        return a.startsWith(QStringLiteral("--screenshot="));
+    });
+    if (shotIt != args.cend()) {
+        const QString path = shotIt->mid(13);
+        QTimer::singleShot(2500, &app, [&app, path]() {
+            int rc = 2;
+            const auto windows = QGuiApplication::allWindows();
+            if (!windows.isEmpty()) {
+                if (auto *w = qobject_cast<QQuickWindow *>(windows.first())) {
+                    const QImage img = w->grabWindow();
+                    if (!img.isNull() && img.save(path))
+                        rc = 0;
+                }
+            }
+            app.exit(rc);
+        });
+    }
 
     return app.exec();
 }

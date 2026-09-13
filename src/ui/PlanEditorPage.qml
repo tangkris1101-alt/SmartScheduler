@@ -1081,7 +1081,7 @@ Item {
                 Layout.leftMargin: Theme.spacingXL; Layout.rightMargin: Theme.spacingXL
                 Layout.topMargin: Theme.spacingM
                 Text { text: qsTr("同课已存在时覆盖"); color: Theme.text; font.pixelSize: Theme.fontBody }
-                AppSwitch { id: overwriteSwitch }
+                AppSwitch { id: overwriteSwitch; onToggled: overwriteSwitch.checked = checked }
                 Item { Layout.fillWidth: true }
             }
             Text {
