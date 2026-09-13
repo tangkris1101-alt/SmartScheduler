@@ -153,5 +153,58 @@ int main(int argc, char *argv[])
         });
     }
 
+    // 回归自检：--smoke=reopen-dirty 模拟「脏项目状态下点继续上次」——示例学校（含完整数据、
+    // 脏标记）下直接 openProject 最近文件，随后逐页切换触发所有绑定重算；崩溃即失败，退出码 0 通过
+    const auto smokeIt = std::find_if(args.cbegin(), args.cend(), [](const QString &a) {
+        return a.startsWith(QStringLiteral("--smoke="));
+    });
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("reopen-dirty")) {
+        QTimer::singleShot(1200, &app, [&appController, &app]() {
+            // 确保最近文件里有一个可打开的项目
+            QString prev = appController.recentFiles().value(0);
+            if (prev.isEmpty()) {
+                appController.newProject(QStringLiteral("烟测旧校"), 5, 7, 4, 20);
+                prev = QDir::temp().filePath(QStringLiteral("smoke_prev.spk"));
+                if (!appController.saveProjectAs(prev)) {
+                    qWarning("smoke: 预存项目失败 %s", qPrintable(appController.lastError()));
+                    app.exit(3);
+                    return;
+                }
+            }
+            appController.createSampleSchool(false); // 6班/11课/14师 + 约束，脏
+            fprintf(stderr, "[smoke] sample school created\n");
+            if (!appController.projectDirty()) {
+                app.exit(4);
+                return;
+            }
+            fprintf(stderr, "[smoke] reopening %s\n", qPrintable(prev));
+            if (!appController.openProject(prev)) {
+                qWarning("smoke: openProject 失败 %s", qPrintable(appController.lastError()));
+                app.exit(5);
+                return;
+            }
+            fprintf(stderr, "[smoke] reopened ok\n");
+            // 逐页切换，让所有页面的绑定都重算一遍
+            const auto windows = QGuiApplication::allWindows();
+            auto *w = windows.isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(windows.first());
+            if (!w) {
+                app.exit(6);
+                return;
+            }
+            auto *page = new int(0);
+            QTimer *timer = new QTimer(&app);
+            QObject::connect(timer, &QTimer::timeout, &app, [&app, w, page, timer]() {
+                if (*page > 9) {
+                    timer->stop();
+                    app.exit(0);
+                    return;
+                }
+                w->setProperty("currentPage", *page);
+                ++(*page);
+            });
+            timer->start(150);
+        });
+    }
+
     return app.exec();
 }

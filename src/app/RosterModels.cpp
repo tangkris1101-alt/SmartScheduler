@@ -64,7 +64,11 @@ QVariant NamedEntityModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_view.size())
         return {};
-    const sched::NamedEntity *e = entityAt(m_view[index.row()]);
+    const int src = m_view[index.row()];
+    // 防御：项目切换的信号级联中 m_view 可能短暂指向已替换的旧数据，越界读取会崩溃
+    if (src < 0 || src >= sourceCount())
+        return {};
+    const sched::NamedEntity *e = entityAt(src);
     switch (role) {
     case IdRole: return e->id;
     case NameRole: return e->name;
@@ -81,7 +85,10 @@ bool NamedEntityModel::setData(const QModelIndex &index, const QVariant &value, 
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_view.size())
         return false;
-    sched::NamedEntity *e = entityAt(m_view[index.row()]);
+    const int src = m_view[index.row()];
+    if (src < 0 || src >= sourceCount())
+        return false;
+    sched::NamedEntity *e = entityAt(src);
     bool ok = true;
     switch (role) {
     case NameRole: e->name = value.toString(); break;

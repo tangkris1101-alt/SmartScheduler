@@ -17,6 +17,9 @@ Item {
     function refreshCandidates() {
         const gid = selectedGroupId()
         root.candidateList = gid >= 0 ? groupModel.candidates(gid) : []
+        // 同步名称编辑框（直接赋值，不用绑定，避免输入中被重置）
+        nameField.text = root.selectedRow >= 0 && root.selectedRow < groupModel.count
+                         ? String(groupModel.get(root.selectedRow, "name") ?? "") : ""
     }
     onSelectedRowChanged: refreshCandidates()
 
@@ -151,6 +154,27 @@ Item {
                     font.pixelSize: Theme.fontSubtitle
                     font.bold: true
                     color: Theme.text
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacingM
+                    Text {
+                        text: qsTr("名单名称")
+                        color: Theme.textSecondary
+                        font.pixelSize: Theme.fontCaption
+                    }
+                    AppTextField {
+                        id: nameField
+                        Layout.fillWidth: true
+                        placeholder: qsTr("输入名称后回车确认")
+                        showClear: false
+                        onAccepted: {
+                            const name = text.trim()
+                            if (name.length > 0 && root.selectedRow >= 0)
+                                groupModel.set(root.selectedRow, "name", name)
+                            refreshCandidates() // 还原显示为模型当前值
+                        }
+                    }
                 }
                 Text {
                     Layout.fillWidth: true

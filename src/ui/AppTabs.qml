@@ -1,13 +1,15 @@
 import QtQuick
 
-// 分段标签切换：滑动高亮动画
+// 分段标签切换：滑动高亮动画。stretch=true 时标签均分可用宽度（文字超长省略），
+// 用于打印输出页等宽度受限场景；默认按内容自适应，行为不变。
 Item {
     id: root
     property var model: []
     property int currentIndex: 0
+    property bool stretch: false
     signal tabClicked(int index)
 
-    implicitWidth: row.x * 2 + row.implicitWidth
+    implicitWidth: stretch ? 160 : row.x * 2 + row.implicitWidth
     implicitHeight: 36
 
     Rectangle {
@@ -40,11 +42,16 @@ Item {
                 id: tab
                 required property int index
                 required property string modelData
-                width: lbl.implicitWidth + 32
+                width: root.stretch
+                       ? Math.max(40, (root.width - row.x * 2) / Math.max(1, root.model.length))
+                       : lbl.implicitWidth + 32
                 height: 36
                 Text {
                     id: lbl
                     anchors.centerIn: parent
+                    width: root.stretch ? Math.min(implicitWidth, tab.width - 10) : implicitWidth
+                    elide: root.stretch ? Text.ElideRight : Text.ElideNone
+                    horizontalAlignment: Text.AlignHCenter
                     text: tab.modelData
                     font.pixelSize: Theme.fontBody
                     color: root.currentIndex === tab.index ? Theme.text : Theme.textSecondary

@@ -21,7 +21,46 @@ Flickable {
         id: openDialog
         fileMode: FileDialog.OpenFile
         nameFilters: [qsTr("SmartScheduler 项目 (*.spk)")]
-        onAccepted: app.openProject(selectedFile.toString())
+        onAccepted: root.openProjectGuarded(selectedFile.toString())
+    }
+
+    // 脏项目守护：打开/继续上次前提示保存，避免未保存更改被静默丢弃
+    function openProjectGuarded(path) {
+        if (app.projectDirty) {
+            guardDialog.pendingPath = path
+            guardDialog.open()
+        } else {
+            app.openProject(path)
+        }
+    }
+
+    AppConfirmDialog {
+        id: guardDialog
+        parent: Overlay.overlay
+        property string pendingPath: ""
+        title: qsTr("未保存的更改")
+        message: qsTr("当前项目「%1」有未保存的更改，继续打开将丢弃这些更改。是否先保存？")
+            .arg(app.schoolName)
+        okText: qsTr("保存并继续")
+        thirdText: qsTr("不保存继续")
+        cancelText: qsTr("取消")
+        onAccepted: {
+            if (app.saveProject())
+                app.openProject(pendingPath)
+            else
+                saveAsGuardDialog.open()
+        }
+        onThirdAction: app.openProject(pendingPath)
+    }
+
+    FileDialog {
+        id: saveAsGuardDialog
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("SmartScheduler 项目 (*.spk)")]
+        onAccepted: {
+            if (app.saveProjectAs(selectedFile.toString()))
+                app.openProject(guardDialog.pendingPath)
+        }
     }
 
     ColumnLayout {
@@ -71,7 +110,7 @@ Flickable {
                         text: qsTr("⏱ 继续上次")
                         variant: "subtle"
                         enabled: app.recentFiles.length > 0
-                        onClicked: app.openProject(app.recentFiles[0])
+                        onClicked: root.openProjectGuarded(app.recentFiles[0])
                     }
                     AppButton {
                         text: qsTr("❓ 新手引导")
@@ -226,7 +265,7 @@ Flickable {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: app.openProject(modelData)
+                            onClicked: root.openProjectGuarded(modelData)
                         }
                     }
                 }

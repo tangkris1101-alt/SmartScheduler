@@ -147,7 +147,7 @@ Item {
 
             // 左：对象选择
             AppCard {
-                Layout.preferredWidth: 300
+                Layout.preferredWidth: 336
                 Layout.fillHeight: true
                 ColumnLayout {
                     anchors.fill: parent
@@ -155,6 +155,8 @@ Item {
                     spacing: Theme.spacingS
 
                     AppTabs {
+                        Layout.fillWidth: true
+                        stretch: true
                         model: root.scopeNames
                         currentIndex: root.scopeIndex
                         onTabClicked: function (index) {

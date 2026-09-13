@@ -86,13 +86,17 @@ bool AppController::openProject(const QString &pathOrUrl)
     m_currentPath = path;
     m_hasProject = true;
     m_dirty = false;
+    m_resultPending = false;
+    // 先发 projectChanged 让所有模型同步复位，再发其它信号 —— QML 对任一信号的
+    // 同步响应（如列表重建）都会读到一致的模型视图，避免 m_view 指向旧数据崩溃
+    Q_EMIT projectChanged();
+    Q_EMIT resultPendingChanged();
     addRecentFile(path);
     // 打印设置随项目载入
     const QVariant saved = m_store.setting(QStringLiteral("print"));
     if (saved.isValid() && !saved.isNull())
         m_printSettings = saved.toMap();
     Q_EMIT printSettingsChanged();
-    Q_EMIT projectChanged();
     Q_EMIT projectDirtyChanged();
     Q_EMIT statsChanged();
     Q_EMIT scheduleChanged();

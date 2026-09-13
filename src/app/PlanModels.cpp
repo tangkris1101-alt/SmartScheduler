@@ -42,7 +42,11 @@ sched::PlanEntry *PlanListModel::entryAtRow(int row) const
 {
     if (row < 0 || row >= m_view.size())
         return nullptr;
-    return const_cast<sched::PlanEntry *>(&m_app->school()->planEntries[m_view[row]]);
+    const int src = m_view[row];
+    // 防御：项目切换的信号级联中 m_view 可能短暂指向已替换的旧数据
+    if (src < 0 || src >= m_app->school()->planEntries.size())
+        return nullptr;
+    return const_cast<sched::PlanEntry *>(&m_app->school()->planEntries[src]);
 }
 
 const sched::PlanEntry *PlanListModel::entryAt(int sourceRow) const
@@ -54,7 +58,9 @@ QVariant PlanListModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_view.size())
         return {};
-    const sched::PlanEntry *e = entryAt(m_view[index.row()]);
+    const sched::PlanEntry *e = entryAtRow(index.row()); // 含源行防御性校验
+    if (!e)
+        return {};
     const sched::School *s = m_app->school();
     switch (role) {
     case IdRole: return e->id;
@@ -310,7 +316,11 @@ QVariant DutyModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_view.size())
         return {};
-    const sched::PlanEntry &e = m_app->school()->planEntries[m_view[index.row()]];
+    const int src = m_view[index.row()];
+    // 防御：项目切换的信号级联中 m_view 可能短暂指向已替换的旧数据
+    if (src < 0 || src >= m_app->school()->planEntries.size())
+        return {};
+    const sched::PlanEntry &e = m_app->school()->planEntries[src];
     const sched::School *s = m_app->school();
     switch (role) {
     case EntryIdRole: return e.id;
@@ -376,7 +386,10 @@ bool DutyModel::removeRow(int row)
 {
     if (row < 0 || row >= m_view.size())
         return false;
-    sched::PlanEntry &e = m_app->school()->planEntries[m_view[row]];
+    const int src = m_view[row];
+    if (src < 0 || src >= m_app->school()->planEntries.size())
+        return false;
+    sched::PlanEntry &e = m_app->school()->planEntries[src];
     e.teacherIds.removeAll(m_teacherId);
     fullReset();
     m_app->markDirty();
@@ -397,7 +410,10 @@ bool DutyModel::set(int row, const QString &roleName, const QVariant &value)
 {
     if (row < 0 || row >= m_view.size())
         return false;
-    sched::PlanEntry &e = m_app->school()->planEntries[m_view[row]];
+    const int src = m_view[row];
+    if (src < 0 || src >= m_app->school()->planEntries.size())
+        return false;
+    sched::PlanEntry &e = m_app->school()->planEntries[src];
     if (roleName == QLatin1StringView("progressGroup")) {
         e.progressGroup = value.toInt();
     } else if (roleName == QLatin1StringView("weeklyPeriods")) {
