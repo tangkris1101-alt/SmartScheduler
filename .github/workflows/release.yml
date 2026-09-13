@@ -69,3 +69,16 @@ jobs:
           $files = @($zip)
           if ($setup) { $files += $setup.FullName }
           gh release create $ver $files --title "智排课系统 $ver" --generate-notes
+
+      # 双发到公开 Releases 仓库：应用内「检查更新」匿名查询该仓库的 latest release
+      - name: Publish to public releases repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        shell: pwsh
+        run: |
+          $ver = "${env:GITHUB_REF_NAME}"
+          $zip = "SmartScheduler-$($ver.TrimStart('v'))-win64-portable.zip"
+          $setup = Get-ChildItem installer\Output\*.exe | Select-Object -First 1
+          $files = @($zip)
+          if ($setup) { $files += $setup.FullName }
+          gh release create $ver $files --repo tangkris1101-alt/SmartScheduler-Releases --title "智排课系统 $ver" --generate-notes

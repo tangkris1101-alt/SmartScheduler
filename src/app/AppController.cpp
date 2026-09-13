@@ -975,7 +975,7 @@ void AppController::checkUpdate()
     Q_EMIT updateStatusChanged();
 
     QNetworkRequest req(
-        QUrl(QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler/releases/latest")));
+        QUrl(QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest")));
     req.setRawHeader("Accept", "application/vnd.github+json");
     req.setRawHeader("User-Agent", "SmartScheduler-UpdateCheck");
     QNetworkReply *reply = m_nam->get(req);
@@ -983,7 +983,7 @@ void AppController::checkUpdate()
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
             m_updateStatus = 4;
-            m_updateMessage = tr("自动检查失败（%1）。私有仓库无法匿名查询，请打开发布页查看。")
+            m_updateMessage = tr("自动检查失败（%1），请检查网络后重试，或打开发布页查看。")
                                   .arg(reply->errorString());
             Q_EMIT updateStatusChanged();
             return;
@@ -1009,7 +1009,7 @@ void AppController::checkUpdate()
 void AppController::openReleasesPage()
 {
     QDesktopServices::openUrl(
-        QUrl(QStringLiteral("https://github.com/tangkris1101-alt/SmartScheduler/releases")));
+        QUrl(QStringLiteral("https://github.com/tangkris1101-alt/SmartScheduler-Releases/releases")));
 }
 
 void AppController::openLogDir()
