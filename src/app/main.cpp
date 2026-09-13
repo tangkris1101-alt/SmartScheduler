@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <QIcon>
 #include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -22,6 +23,7 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("SmartScheduler"));
     app.setApplicationDisplayName(QStringLiteral("智排课系统"));
     app.setOrganizationName(QStringLiteral("SmartScheduler"));
+    app.setWindowIcon(QIcon(QStringLiteral(":/qt/qml/SmartScheduler/icon.png")));
 
     AppController appController;
     Theme theme;

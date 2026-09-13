@@ -54,8 +54,9 @@ jobs:
       - name: Installer (Inno Setup)
         shell: cmd
         run: |
+          set VER=%GITHUB_REF_NAME:v=%
           where iscc >nul 2>nul || choco install innosetup -y --no-progress
-          where iscc >nul 2>nul && iscc installer\SmartScheduler.iss || "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\SmartScheduler.iss
+          where iscc >nul 2>nul && iscc /DMyAppVersion=%VER% installer\SmartScheduler.iss || "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=%VER% installer\SmartScheduler.iss
 
       - name: Create GitHub Release
         env:

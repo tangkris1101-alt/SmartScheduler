@@ -3,7 +3,10 @@
 
 #define MyAppName "智排课系统"
 #define MyAppNameEn "SmartScheduler"
-#define MyAppVersion "1.0.0"
+; 版本号可被命令行覆盖：iscc /DMyAppVersion=1.0.2 ...
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.2"
+#endif
 #define MyAppPublisher "SmartScheduler"
 #define MyAppExeName "SmartScheduler.exe"
 
@@ -16,10 +19,12 @@ DefaultDirName={autopf}\SmartScheduler
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=Output
-OutputBaseFilename=SmartScheduler-1.0.0-setup
+OutputBaseFilename=SmartScheduler-{#MyAppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\icon.ico
+UninstallDisplayIcon={app}\SmartScheduler.exe
 ShowLanguageDialog=auto
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible

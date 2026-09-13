@@ -4,11 +4,17 @@ add_subdirectory(app)
 
 qt_add_executable(SmartScheduler
     app/main.cpp
+    ${CMAKE_SOURCE_DIR}/assets/app.rc
 )
+
+set_source_files_properties(${CMAKE_SOURCE_DIR}/assets/icon.png
+    PROPERTIES QT_RESOURCE_ALIAS icon.png)
 
 qt_add_qml_module(SmartScheduler
     URI SmartScheduler
     VERSION 1.0
+    RESOURCES
+        ${CMAKE_SOURCE_DIR}/assets/icon.png
     QML_FILES
         ui/Main.qml
         ui/AppButton.qml

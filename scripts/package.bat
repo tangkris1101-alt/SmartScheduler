@@ -1,12 +1,15 @@
 @echo off
 rem ============================================================
 rem SmartScheduler 打包脚本（Windows）
-rem 用法：scripts\package.bat
-rem 产物：deploy\SmartScheduler-1.0.0-win64-portable.zip
-rem       若已安装 Inno Setup，还会生成 installer\Output\SmartScheduler-1.0.0-setup.exe
+rem 用法：scripts\package.bat [版本号]   例：scripts\package.bat 1.0.2
+rem 产物：deploy\SmartScheduler-<版本>-win64-portable.zip
+rem       若已安装 Inno Setup，还会生成 installer\Output\SmartScheduler-<版本>-setup.exe
 rem ============================================================
 setlocal enabledelayedexpansion
 cd /d %~dp0\..
+
+set VER=%~1
+if "%VER%"=="" set VER=1.0.2
 
 set QTDIR=C:\Qt\6.8.1\mingw_64
 set PATH=C:\Qt\Tools\CMake_64\bin;C:\Qt\Tools\Ninja;C:\Qt\Tools\mingw1310_64\bin;%QTDIR%\bin;%PATH%
@@ -23,7 +26,7 @@ copy /y build\SmartScheduler.exe deploy\ >nul
 windeployqt --release --compiler-runtime --qmldir src\ui deploy\SmartScheduler.exe || exit /b 1
 
 echo [3/4] 打便携 zip 包...
-set ZIP=SmartScheduler-1.0.0-win64-portable.zip
+set ZIP=SmartScheduler-%VER%-win64-portable.zip
 if exist %ZIP% del /q %ZIP%
 powershell -NoProfile -Command "Compress-Archive -Path deploy\* -DestinationPath '%ZIP%' -CompressionLevel Optimal" 2>nul
 if not exist %ZIP% tar -a -cf %ZIP% -C deploy . || exit /b 1
@@ -32,7 +35,7 @@ echo 已生成 %ZIP%
 echo [4/4] Inno Setup 安装包（可选）...
 where iscc >nul 2>nul
 if %errorlevel% equ 0 (
-    iscc installer\SmartScheduler.iss && echo 安装包见 installer\Output\
+    iscc /DMyAppVersion=%VER% installer\SmartScheduler.iss && echo 安装包见 installer\Output\
 ) else (
     echo 未找到 iscc（Inno Setup）。跳过安装包编译。
     echo 安装方式：winget install JRSoftware.InnoSetup 后重新运行本脚本。
