@@ -21,7 +21,7 @@ int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("SmartScheduler"));
-    app.setApplicationDisplayName(QStringLiteral("智排课系统"));
+    // 注意：不要设置 applicationDisplayName —— Qt 会把它追加到窗口标题，造成重复
     app.setOrganizationName(QStringLiteral("SmartScheduler"));
     app.setWindowIcon(QIcon(QStringLiteral(":/qt/qml/SmartScheduler/icon.png")));
 

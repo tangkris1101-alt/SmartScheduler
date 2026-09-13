@@ -34,10 +34,12 @@ Flickable {
         // 欢迎卡
         AppCard {
             Layout.fillWidth: true
-            Layout.preferredHeight: 200
+            Layout.preferredHeight: welcomeColumn.implicitHeight + Theme.spacingXL * 2
 
             ColumnLayout {
+                id: welcomeColumn
                 anchors.left: parent.left
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.margins: Theme.spacingXL
                 spacing: Theme.spacingS
