@@ -82,3 +82,21 @@ jobs:
           $files = @($zip)
           if ($setup) { $files += $setup.FullName }
           gh release create $ver $files --repo tangkris1101-alt/SmartScheduler-Releases --title "智排课系统 $ver" --generate-notes
+
+      # 回写 version.json 到公开仓 main：应用内检查更新优先走 jsDelivr 国内 CDN 读它
+      - name: Update version.json on public repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        shell: pwsh
+        run: |
+          $ver = "${env:GITHUB_REF_NAME}"
+          $setup = (Get-ChildItem installer\Output\*.exe | Select-Object -First 1).Name
+          $json = @{ tag = $ver; setup = $setup } | ConvertTo-Json -Compress
+          git clone --depth 1 "https://x-access-token:$env:GH_TOKEN@github.com/tangkris1101-alt/SmartScheduler-Releases.git" releases-repo
+          Set-Content -Path releases-repo\version.json -Value $json -Encoding utf8
+          cd releases-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "version.json -> $ver"
+          git push

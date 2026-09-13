@@ -138,6 +138,11 @@ Item {
                             onClicked: app.openReleasesPage()
                         }
                         AppButton {
+                            visible: app.updateStatus === 3
+                            text: qsTr("镜像加速下载")
+                            onClicked: app.openMirrorDownload()
+                        }
+                        AppButton {
                             visible: app.updateStatus === 4
                             text: qsTr("打开发布页")
                             onClicked: app.openReleasesPage()

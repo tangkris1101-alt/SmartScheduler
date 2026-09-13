@@ -77,6 +77,8 @@ public:
 
     Q_INVOKABLE void newProject(const QString &name, int daysPerWeek, int periodsPerDay,
                                 int morningPeriods, int weeksPerTerm);
+    // 起始模板：0=空白 1=小学 2=初中 3=高中；须在 newProject 之后调用，填充课程/班级/年级组/教室
+    Q_INVOKABLE void applyTemplate(int tpl);
     Q_INVOKABLE bool openProject(const QString &pathOrUrl);
     Q_INVOKABLE bool saveProject();    // 无路径时返回 false（QML 弹出另存对话框）
     Q_INVOKABLE bool saveProjectAs(const QString &pathOrUrl);
@@ -154,6 +156,7 @@ public:
 
     Q_INVOKABLE void checkUpdate();
     Q_INVOKABLE void openReleasesPage();
+    Q_INVOKABLE void openMirrorDownload(); // 国内镜像加速下载最新安装包
     Q_INVOKABLE void openLogDir();
     Q_INVOKABLE bool exportLog(const QString &pathOrUrl);
 
@@ -209,4 +212,8 @@ private:
     int m_updateStatus = 0;
     QString m_latestVersion;
     QString m_updateMessage;
+    QString m_latestSetup;      // 最新版安装包文件名（镜像下载拼 URL 用）
+    QStringList m_updateSources; // 更新检查通道（按国内可达性排序，逐个回退）
+    int m_updateAttempt = 0;
+    void tryUpdateSource();
 };

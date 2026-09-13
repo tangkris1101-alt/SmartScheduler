@@ -42,6 +42,7 @@ private Q_SLOTS:
     void temporaryModeOps();
     void printExport();
     void sampleSchool();
+    void projectTemplates();
     void versionAndUpdate();
     void logExport();
 };
@@ -905,6 +906,48 @@ void TestApp::sampleSchool()
     // 预排未被移动
     QCOMPARE(s->schedule.courseAt(s->classes.first().id, 4 * 7, 0).value_or(-1),
              s->courses[9].id); // 体育
+}
+
+void TestApp::projectTemplates()
+{
+    // 空白模板：不填充任何数据
+    {
+        AppController app;
+        app.newProject(QStringLiteral("空白校"), 5, 7, 4, 20);
+        app.applyTemplate(0);
+        QCOMPARE(app.school()->classes.size(), 0);
+        QCOMPARE(app.school()->courses.size(), 0);
+    }
+    // 小学模板：6 年级 x 3 班 = 18 班、6 个年级组且成员已勾选、10 门课、5 个教室
+    {
+        AppController app;
+        app.newProject(QStringLiteral("实验小学"), 5, 7, 4, 20);
+        app.applyTemplate(1);
+        const auto *s = app.school();
+        QCOMPARE(s->classes.size(), 18);
+        QCOMPARE(s->groups.size(), 6);
+        QCOMPARE(s->courses.size(), 10);
+        QCOMPARE(s->classrooms.size(), 5);
+        for (const auto &g : s->groups)
+            QCOMPARE(g.memberIds.size(), 3);
+        // 班级 gradeId 指向各自年级组
+        for (const auto &c : s->classes)
+            QVERIFY(s->findGroup(c.gradeId) != nullptr);
+    }
+    // 初中模板：3 年级 x 4 班，含物理/化学；越界模板号为空操作
+    {
+        AppController app;
+        app.newProject(QStringLiteral("实验初中"), 5, 8, 4, 20);
+        app.applyTemplate(4); // 非法：不应改动
+        QCOMPARE(app.school()->classes.size(), 0);
+        app.applyTemplate(2);
+        QCOMPARE(app.school()->classes.size(), 12);
+        QCOMPARE(app.school()->groups.size(), 3);
+        bool hasPhysics = false;
+        for (const auto &c : app.school()->courses)
+            if (c.name == QStringLiteral("物理")) hasPhysics = true;
+        QVERIFY(hasPhysics);
+    }
 }
 
 void TestApp::versionAndUpdate()

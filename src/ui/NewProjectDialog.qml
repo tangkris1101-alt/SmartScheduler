@@ -35,6 +35,7 @@ Popup {
     function create() {
         app.newProject(nameField.text, daysStepper.value, periodsStepper.value,
                        morningStepper.value, weeksStepper.value)
+        app.applyTemplate(templateCombo.currentIndex)
         root.close()
         root.created()
     }
@@ -74,6 +75,20 @@ Popup {
                 placeholder: qsTr("例如：第一中学")
                 showClear: false
                 onAccepted: if (text.length > 0) root.create()
+            }
+
+            Text { text: qsTr("起始模板"); color: Theme.text; font.pixelSize: Theme.fontBody }
+            AppComboBox {
+                id: templateCombo
+                Layout.fillWidth: true
+                model: [qsTr("空白项目"), qsTr("小学模板"), qsTr("初中模板"), qsTr("高中模板")]
+                currentIndex: 0
+                // 模板联动推荐作息（仍可手动调整）
+                onActivated: function (index) {
+                    if (index === 1) { periodsStepper.value = 7; morningStepper.value = 4 }
+                    else if (index === 2) { periodsStepper.value = 8; morningStepper.value = 4 }
+                    else if (index === 3) { periodsStepper.value = 9; morningStepper.value = 5 }
+                }
             }
 
             Text { text: qsTr("每周上课天数"); color: Theme.text; font.pixelSize: Theme.fontBody }

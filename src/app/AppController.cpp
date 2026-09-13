@@ -72,6 +72,117 @@ void AppController::newProject(const QString &name, int daysPerWeek, int periods
     Q_EMIT resultPendingChanged();
 }
 
+void AppController::applyTemplate(int tpl)
+{
+    if (!m_hasProject || tpl <= 0 || tpl > 3)
+        return;
+    sched::School &s = m_school;
+
+    auto addCourse = [&](const QString &name, bool major, bool science,
+                         sched::AmPmPolicy ampm = sched::AmPmPolicy::Auto) {
+        sched::Course c;
+        c.name = name;
+        c.isMajor = major;
+        c.isScience = science;
+        c.amPmPolicy = ampm;
+        s.addCourse(c);
+    };
+    auto addRoom = [&](const QString &name, int cap) {
+        sched::Classroom r;
+        r.name = name;
+        r.capacity = cap;
+        s.addClassroom(r);
+    };
+    // 年级组 + 班级，并把班级自动勾选进年级组
+    auto addGrade = [&](const QString &gradeName, int classCount) {
+        sched::Group g;
+        g.type = sched::Group::Type::Grade;
+        g.name = gradeName;
+        const qint64 gid = s.addGroup(g);
+        for (int i = 1; i <= classCount; ++i) {
+            sched::ClassInfo c;
+            c.name = QStringLiteral("%1%2班").arg(gradeName).arg(i);
+            c.gradeId = gid;
+            s.findGroup(gid)->memberIds.append(s.addClass(c));
+        }
+    };
+
+    if (tpl == 1) { // 小学
+        addCourse(QStringLiteral("语文"), true, false, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("数学"), true, true, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("英语"), true, false, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("道德与法治"), false, false);
+        addCourse(QStringLiteral("科学"), false, true);
+        addCourse(QStringLiteral("体育"), false, false, sched::AmPmPolicy::Afternoon);
+        addCourse(QStringLiteral("音乐"), false, false);
+        addCourse(QStringLiteral("美术"), false, false);
+        addCourse(QStringLiteral("信息技术"), false, true);
+        addCourse(QStringLiteral("劳动"), false, false);
+        const QStringList grades = {QStringLiteral("一年级"), QStringLiteral("二年级"),
+                                    QStringLiteral("三年级"), QStringLiteral("四年级"),
+                                    QStringLiteral("五年级"), QStringLiteral("六年级")};
+        for (const auto &g : grades)
+            addGrade(g, 3);
+        addRoom(QStringLiteral("操场"), 8);
+        addRoom(QStringLiteral("音乐室"), 2);
+        addRoom(QStringLiteral("美术室"), 2);
+        addRoom(QStringLiteral("计算机房"), 2);
+        addRoom(QStringLiteral("科学实验室"), 2);
+    } else if (tpl == 2) { // 初中
+        addCourse(QStringLiteral("语文"), true, false, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("数学"), true, true, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("英语"), true, false, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("物理"), true, true);
+        addCourse(QStringLiteral("化学"), false, true);
+        addCourse(QStringLiteral("生物"), false, true);
+        addCourse(QStringLiteral("历史"), false, false);
+        addCourse(QStringLiteral("地理"), false, false);
+        addCourse(QStringLiteral("道德与法治"), false, false);
+        addCourse(QStringLiteral("体育"), false, false, sched::AmPmPolicy::Afternoon);
+        addCourse(QStringLiteral("音乐"), false, false);
+        addCourse(QStringLiteral("美术"), false, false);
+        addCourse(QStringLiteral("信息技术"), false, true);
+        const QStringList grades = {QStringLiteral("初一"), QStringLiteral("初二"),
+                                    QStringLiteral("初三")};
+        for (const auto &g : grades)
+            addGrade(g, 4);
+        addRoom(QStringLiteral("操场"), 8);
+        addRoom(QStringLiteral("计算机房"), 3);
+        addRoom(QStringLiteral("物理实验室"), 2);
+        addRoom(QStringLiteral("化学实验室"), 2);
+        addRoom(QStringLiteral("生物实验室"), 2);
+        addRoom(QStringLiteral("音乐室"), 2);
+        addRoom(QStringLiteral("美术室"), 2);
+    } else { // 高中
+        addCourse(QStringLiteral("语文"), true, false, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("数学"), true, true, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("英语"), true, false, sched::AmPmPolicy::Morning);
+        addCourse(QStringLiteral("物理"), true, true);
+        addCourse(QStringLiteral("化学"), true, true);
+        addCourse(QStringLiteral("生物"), false, true);
+        addCourse(QStringLiteral("历史"), false, false);
+        addCourse(QStringLiteral("地理"), false, false);
+        addCourse(QStringLiteral("思想政治"), false, false);
+        addCourse(QStringLiteral("体育"), false, false, sched::AmPmPolicy::Afternoon);
+        addCourse(QStringLiteral("信息技术"), false, true);
+        addCourse(QStringLiteral("通用技术"), false, false);
+        const QStringList grades = {QStringLiteral("高一"), QStringLiteral("高二"),
+                                    QStringLiteral("高三")};
+        for (const auto &g : grades)
+            addGrade(g, 4);
+        addRoom(QStringLiteral("操场"), 8);
+        addRoom(QStringLiteral("计算机房"), 3);
+        addRoom(QStringLiteral("物理实验室"), 2);
+        addRoom(QStringLiteral("化学实验室"), 2);
+        addRoom(QStringLiteral("生物实验室"), 2);
+    }
+
+    markDirty();
+    // 先发 projectChanged 让模型一致复位（与 openProject 相同的信号顺序约定）
+    Q_EMIT projectChanged();
+    Q_EMIT constraintsChanged();
+}
+
 bool AppController::openProject(const QString &pathOrUrl)
 {
     const QString path = toLocalPath(pathOrUrl);
@@ -978,26 +1089,55 @@ void AppController::checkUpdate()
     m_updateMessage.clear();
     Q_EMIT updateStatusChanged();
 
-    QNetworkRequest req(
-        QUrl(QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest")));
+    // 国内直连 GitHub 不稳定：优先 jsDelivr 国内 CDN 上的 version.json（发布流水线每次发版写入），
+    // 其次 GitHub API 直连，最后公益反代；任一通道失败自动回退下一个
+    m_updateSources = {
+        QStringLiteral("https://cdn.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json"),
+        QStringLiteral("https://fastly.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json"),
+        QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest"),
+        QStringLiteral("https://mirror.ghproxy.com/https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest"),
+    };
+    m_updateAttempt = 0;
+    tryUpdateSource();
+}
+
+void AppController::tryUpdateSource()
+{
+    if (m_updateAttempt >= m_updateSources.size()) {
+        m_updateStatus = 4;
+        m_updateMessage = tr("自动检查失败（已依次尝试国内 CDN、GitHub 直连、镜像代理），"
+                             "请检查网络后重试，或打开发布页查看。");
+        Q_EMIT updateStatusChanged();
+        return;
+    }
+    const QString url = m_updateSources.at(m_updateAttempt++);
+    QNetworkRequest req{QUrl(url)};
     req.setRawHeader("Accept", "application/vnd.github+json");
     req.setRawHeader("User-Agent", "SmartScheduler-UpdateCheck");
+    req.setTransferTimeout(8000); // 8s 超时，避免单一通道卡死
     QNetworkReply *reply = m_nam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, url]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            m_updateStatus = 4;
-            m_updateMessage = tr("自动检查失败（%1），请检查网络后重试，或打开发布页查看。")
-                                  .arg(reply->errorString());
-            Q_EMIT updateStatusChanged();
+            qWarning("检查更新: 通道 %s 失败（%s），尝试下一通道", qPrintable(url),
+                     qPrintable(reply->errorString()));
+            tryUpdateSource();
             return;
         }
-        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-        const QString tag = doc.object().value(QStringLiteral("tag_name")).toString();
+        const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
+        // version.json（CDN 通道）用 tag；GitHub API 用 tag_name
+        QString tag = obj.value(QStringLiteral("tag")).toString();
+        if (tag.isEmpty())
+            tag = obj.value(QStringLiteral("tag_name")).toString();
         if (tag.isEmpty()) {
-            m_updateStatus = 4;
-            m_updateMessage = tr("未能解析发布信息。");
-        } else if (compareVersions(tag, appVersion()) > 0) {
+            qWarning("检查更新: 通道 %s 返回内容无法解析，尝试下一通道", qPrintable(url));
+            tryUpdateSource();
+            return;
+        }
+        const QString setup = obj.value(QStringLiteral("setup")).toString();
+        if (!setup.isEmpty())
+            m_latestSetup = setup;
+        if (compareVersions(tag, appVersion()) > 0) {
             m_updateStatus = 3;
             m_latestVersion = tag;
             m_updateMessage = tr("发现新版本 %1，建议更新。").arg(tag);
@@ -1008,6 +1148,21 @@ void AppController::checkUpdate()
         }
         Q_EMIT updateStatusChanged();
     });
+}
+
+void AppController::openMirrorDownload()
+{
+    if (m_latestVersion.isEmpty()) {
+        openReleasesPage();
+        return;
+    }
+    QString setup = m_latestSetup;
+    if (setup.isEmpty()) // 兼容无 setup 字段的旧 version.json / API 通道
+        setup = QStringLiteral("SmartScheduler-%1-setup.exe").arg(QString(m_latestVersion).mid(1));
+    QDesktopServices::openUrl(
+        QUrl(QStringLiteral("https://ghfast.top/https://github.com/tangkris1101-alt/"
+                            "SmartScheduler-Releases/releases/download/%1/%2")
+                 .arg(m_latestVersion, setup)));
 }
 
 void AppController::openReleasesPage()
