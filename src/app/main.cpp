@@ -62,17 +62,31 @@ int main(int argc, char *argv[])
     engine.loadFromModule(QStringLiteral("SmartScheduler"), QStringLiteral("Main"));
 
     // 自检用：--screenshot=<file> 启动 2.5s 后抓取主窗口截图并退出（配合 QT_QPA_PLATFORM=offscreen）
+    // 可选 --page=N 先切换到指定导航页再截图
     const QStringList args = app.arguments();
     const auto shotIt = std::find_if(args.cbegin(), args.cend(), [](const QString &a) {
         return a.startsWith(QStringLiteral("--screenshot="));
     });
+    const auto pageIt = std::find_if(args.cbegin(), args.cend(), [](const QString &a) {
+        return a.startsWith(QStringLiteral("--page="));
+    });
     if (shotIt != args.cend()) {
         const QString path = shotIt->mid(13);
-        QTimer::singleShot(2500, &app, [&app, path]() {
+        const int page = pageIt != args.cend() ? pageIt->mid(7).toInt() : -1;
+        QTimer::singleShot(2500, &app, [&app, path, page]() {
             int rc = 2;
             const auto windows = QGuiApplication::allWindows();
             if (!windows.isEmpty()) {
                 if (auto *w = qobject_cast<QQuickWindow *>(windows.first())) {
+                    if (page >= 0) {
+                        w->setProperty("currentPage", page);
+                        // 等一页切换动画结束再抓
+                        QTimer::singleShot(400, w, [w, path, &app]() {
+                            const QImage img = w->grabWindow();
+                            app.exit(!img.isNull() && img.save(path) ? 0 : 2);
+                        });
+                        return;
+                    }
                     const QImage img = w->grabWindow();
                     if (!img.isNull() && img.save(path))
                         rc = 0;

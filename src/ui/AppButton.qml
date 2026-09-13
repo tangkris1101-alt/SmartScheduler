@@ -39,9 +39,12 @@ Rectangle {
         anchors.centerIn: parent
         text: root.text
         font.pixelSize: Theme.fontBody
-        color: (root.variant === "primary" || root.variant === "danger")
-               ? Theme.onPrimary
-               : (root.variant === "subtle" ? Theme.primary : Theme.text)
+        // 禁用态统一用 textDisabled：否则 primary/danger 的白字在浅色 surfaceAlt 底上不可见
+        color: !root.enabled
+               ? Theme.textDisabled
+               : ((root.variant === "primary" || root.variant === "danger")
+                  ? Theme.onPrimary
+                  : (root.variant === "subtle" ? Theme.primary : Theme.text))
     }
 
     MouseArea {

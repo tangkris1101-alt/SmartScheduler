@@ -171,7 +171,7 @@ Item {
                         title: app.hasProject ? qsTr("还没有%1").arg(root.tabNames[root.currentTab])
                                               : qsTr("请先新建或打开项目")
                         hint: app.hasProject
-                              ? qsTr("点击右上角「添加」新建一行，或等待 Excel 导入（即将支持）")
+                              ? qsTr("点击右上角「添加」新建一行，或点击「Excel 导入」批量导入")
                               : ""
                     }
                 }
