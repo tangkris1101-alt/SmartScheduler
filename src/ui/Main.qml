@@ -28,7 +28,8 @@ ApplicationWindow {
         { icon: "🚫", label: qsTr("限制条件") },
         { icon: "▶️", label: qsTr("自动排课") },
         { icon: "📊", label: qsTr("课表查看") },
-        { icon: "🖨️", label: qsTr("打印输出") }
+        { icon: "🖨️", label: qsTr("打印输出") },
+        { icon: "🛠️", label: qsTr("设置") }
     ]
 
     // ---- 页面组件（StackLayout 顺序与导航一致）----
@@ -41,8 +42,10 @@ ApplicationWindow {
     Component { id: engineComp; SchedulerPage {} }
     Component { id: tableComp; TimetablePage {} }
     Component { id: printComp; PrintPage {} }
+    Component { id: settingsComp; SettingsPage {} }
     readonly property var pageComponents: [homeComp, rosterComp, groupsComp, coursesComp,
-                                           planComp, limitComp, engineComp, tableComp, printComp]
+                                           planComp, limitComp, engineComp, tableComp, printComp,
+                                           settingsComp]
 
     // ---- 关闭确认 ----
     onClosing: function (close) {
@@ -275,21 +278,21 @@ ApplicationWindow {
                             radius: 1.5
                             color: Theme.primary
                         }
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.spacingM
-                            spacing: Theme.spacingM
-                            Text {
-                                text: navItem.modelData.icon
-                                font.pixelSize: Theme.fontSubtitle
-                            }
-                            Text {
-                                text: navItem.modelData.label
-                                font.pixelSize: Theme.fontBody
-                                font.bold: navItem.index === win.currentPage
-                                color: navItem.index === win.currentPage ? Theme.primary : Theme.text
-                                Behavior on color { ColorAnimation { duration: 120 } }
-                            }
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spacingM + 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: navItem.modelData.icon
+                            font.pixelSize: Theme.fontSubtitle
+                        }
+                        Text {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: navItem.modelData.label
+                            font.pixelSize: Theme.fontBody
+                            font.bold: navItem.index === win.currentPage
+                            color: navItem.index === win.currentPage ? Theme.primary : Theme.text
+                            Behavior on color { ColorAnimation { duration: 120 } }
                         }
                         MouseArea {
                             id: navHover

@@ -20,4 +20,6 @@ add_library(sched_app STATIC
 
 target_include_directories(sched_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(sched_app PUBLIC sched_core sched_data sched_engine Qt6::Core Qt6::Gui Qt6::PrintSupport)
+target_link_libraries(sched_app PUBLIC sched_core sched_data sched_engine Qt6::Core Qt6::Gui Qt6::PrintSupport Qt6::Network)
+
+target_compile_definitions(sched_app PUBLIC APP_VERSION="${PROJECT_VERSION}")

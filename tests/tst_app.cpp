@@ -6,10 +6,13 @@
 #include "PrintController.h"
 #include "RosterModels.h"
 
+#include <QDir>
+#include <QFile>
 #include <QTemporaryDir>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QGuiApplication>
+#include <QUrl>
 #include <QtTest/QTest>
 
 // 桥接层单元测试：项目生命周期、模型角色读写、过滤、级联删除、分组成员
@@ -39,6 +42,8 @@ private Q_SLOTS:
     void temporaryModeOps();
     void printExport();
     void sampleSchool();
+    void versionAndUpdate();
+    void logExport();
 };
 
 void TestApp::projectLifecycle()
@@ -900,6 +905,48 @@ void TestApp::sampleSchool()
     // 预排未被移动
     QCOMPARE(s->schedule.courseAt(s->classes.first().id, 4 * 7, 0).value_or(-1),
              s->courses[9].id); // 体育
+}
+
+void TestApp::versionAndUpdate()
+{
+    // 语义化版本比较：v 前缀、不等长、数值段比较
+    QCOMPARE(AppController::compareVersions(QStringLiteral("v1.0.4"), QStringLiteral("1.0.4")), 0);
+    QCOMPARE(AppController::compareVersions(QStringLiteral("1.0.10"), QStringLiteral("1.0.9")), 1);
+    QCOMPARE(AppController::compareVersions(QStringLiteral("1.0"), QStringLiteral("1.0.1")), -1);
+    QCOMPARE(AppController::compareVersions(QStringLiteral("2.0.0"), QStringLiteral("1.9.9")), 1);
+    QCOMPARE(AppController::compareVersions(QStringLiteral("V1.2"), QStringLiteral("1.2.0")), 0);
+
+    AppController app;
+    QVERIFY(!app.appVersion().isEmpty());
+    QVERIFY(!app.qtVersion().isEmpty());
+    QCOMPARE(app.updateStatus(), 0); // 未检查
+    QVERIFY(!app.logFilePath().isEmpty());
+}
+
+void TestApp::logExport()
+{
+    AppController app;
+    // 写入一条假日志（路径基于测试隔离的 org/app 名）
+    const QString logPath = app.logFilePath();
+    QVERIFY(QDir().mkpath(QFileInfo(logPath).absolutePath()));
+    {
+        QFile f(logPath);
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Text));
+        f.write("2025-01-01 00:00:00.000 [INFO] test log line\n");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dest = dir.filePath(QStringLiteral("exported.log"));
+    QVERIFY(app.exportLog(dest));
+    QFile out(dest);
+    QVERIFY(out.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(QString::fromUtf8(out.readAll()).contains(QStringLiteral("test log line")));
+
+    // file: URL 形式同样可用
+    const QString dest2 = dir.filePath(QStringLiteral("exported2.log"));
+    QVERIFY(app.exportLog(QUrl::fromLocalFile(dest2).toString()));
+    QVERIFY(QFile::exists(dest2));
 }
 
 // QPdfWriter/QFontDatabase 需要 QGuiApplication；headless 用 minimal 平台

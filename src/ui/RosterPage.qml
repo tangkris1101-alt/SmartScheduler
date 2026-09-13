@@ -8,6 +8,8 @@ Item {
 
     property int currentTab: 0
     property int selectedRow: -1
+    // 刷新计数：QAbstractListModel::get() 不参与绑定，数据变更后递增它强制单元格重读
+    property int rev: 0
 
     readonly property var tabModels: [classModel, courseModel, teacherModel, classroomModel]
     readonly property var tabColumns: [
@@ -142,6 +144,7 @@ Item {
                                     width: headerRowWidth() * modelData.w
                                     height: 42
                                     text: {
+                                        root.rev // 建立依赖：数据变更后重新读取
                                         const v = root.currentModel.get(rowItem.index, modelData.role)
                                         return v === null || v === undefined ? "" : String(v)
                                     }
@@ -188,6 +191,14 @@ Item {
         for (let i = 0; i < root.currentColumns.length; ++i)
             sum += root.currentColumns[i].w
         return sum
+    }
+
+    // 模型数据变更 → 递增刷新计数，让单元格绑定重读
+    Connections {
+        target: root.currentModel
+        function onDataChanged() { root.rev++ }
+        function onModelReset() { root.rev++ }
+        function onCountChanged() { root.rev++ }
     }
 
     AppConfirmDialog {

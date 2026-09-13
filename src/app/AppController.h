@@ -10,6 +10,12 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#ifndef APP_VERSION
+#define APP_VERSION "dev"
+#endif
+
+class QNetworkAccessManager;
+
 namespace sched {
 class SchedulerEngine;
 }
@@ -42,6 +48,13 @@ class AppController : public QObject
     Q_PROPERTY(bool resultPending READ resultPending NOTIFY resultPendingChanged)
     Q_PROPERTY(QVariantMap printSettings READ printSettings WRITE setPrintSettings NOTIFY printSettingsChanged)
     Q_PROPERTY(bool importPending READ importPending NOTIFY importPendingChanged)
+    // ---- 设置页：版本 / 检查更新 / 日志 ----
+    Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
+    Q_PROPERTY(QString qtVersion READ qtVersion CONSTANT)
+    Q_PROPERTY(int updateStatus READ updateStatus NOTIFY updateStatusChanged)
+    Q_PROPERTY(QString latestVersion READ latestVersion NOTIFY updateStatusChanged)
+    Q_PROPERTY(QString updateMessage READ updateMessage NOTIFY updateStatusChanged)
+    Q_PROPERTY(QString logFilePath READ logFilePath CONSTANT)
 
 public:
     explicit AppController(QObject *parent = nullptr);
@@ -131,6 +144,22 @@ public:
     QVariantMap printSettings() const { return m_printSettings; }
     void setPrintSettings(const QVariantMap &settings);
 
+    // ---- 设置页：版本 / 检查更新 / 日志 ----
+    QString appVersion() const { return QStringLiteral(APP_VERSION); }
+    QString qtVersion() const { return QString::fromLatin1(qVersion()); }
+    int updateStatus() const { return m_updateStatus; } // 0未检查 1检查中 2已最新 3有新版本 4失败
+    QString latestVersion() const { return m_latestVersion; }
+    QString updateMessage() const { return m_updateMessage; }
+    QString logFilePath() const;
+
+    Q_INVOKABLE void checkUpdate();
+    Q_INVOKABLE void openReleasesPage();
+    Q_INVOKABLE void openLogDir();
+    Q_INVOKABLE bool exportLog(const QString &pathOrUrl);
+
+    // 语义化版本比较：忽略 v/V 前缀，按 . 分段数值比较；a>b 返回 1，相等 0，a<b 返回 -1
+    static int compareVersions(const QString &a, const QString &b);
+
 Q_SIGNALS:
     void projectChanged();
     void projectDirtyChanged();
@@ -144,6 +173,7 @@ Q_SIGNALS:
     void resultPendingChanged();
     void importPendingChanged();
     void printSettingsChanged();
+    void updateStatusChanged();
 
 private:
     static QString toLocalPath(const QString &pathOrUrl);
@@ -173,4 +203,10 @@ private:
     bool m_resultPending = false;
     sched::Schedule m_pendingResult;
     sched::QualityReport m_pendingReport;
+
+    // 检查更新
+    QNetworkAccessManager *m_nam = nullptr;
+    int m_updateStatus = 0;
+    QString m_latestVersion;
+    QString m_updateMessage;
 };

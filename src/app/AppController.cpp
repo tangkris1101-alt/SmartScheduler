@@ -3,8 +3,17 @@
 #include "ExcelIo.h"
 #include "SchedulerEngine.h"
 
+#include <QDesktopServices>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QUrl>
 #include <algorithm>
 
@@ -922,4 +931,99 @@ bool AppController::onboardingShown() const
 void AppController::setOnboardingShown(bool shown)
 {
     QSettings().setValue(QStringLiteral("ui/onboardingShown"), shown);
+}
+
+// ---- 设置页：版本 / 检查更新 / 日志 ----
+
+QString AppController::logFilePath() const
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+           + QStringLiteral("/logs/smartscheduler.log");
+}
+
+int AppController::compareVersions(const QString &a, const QString &b)
+{
+    auto parts = [](QString v) {
+        if (v.startsWith(QLatin1Char('v')) || v.startsWith(QLatin1Char('V')))
+            v = v.mid(1);
+        const QStringList segs = v.split(QLatin1Char('.'));
+        QList<int> nums;
+        nums.reserve(segs.size());
+        for (const QString &s : segs)
+            nums.append(s.toInt());
+        return nums;
+    };
+    const QList<int> pa = parts(a);
+    const QList<int> pb = parts(b);
+    for (int i = 0; i < std::max(pa.size(), pb.size()); ++i) {
+        const int va = i < pa.size() ? pa[i] : 0;
+        const int vb = i < pb.size() ? pb[i] : 0;
+        if (va != vb)
+            return va < vb ? -1 : 1;
+    }
+    return 0;
+}
+
+void AppController::checkUpdate()
+{
+    if (m_updateStatus == 1) // 防止重复点击
+        return;
+    if (!m_nam)
+        m_nam = new QNetworkAccessManager(this);
+    m_updateStatus = 1;
+    m_updateMessage.clear();
+    Q_EMIT updateStatusChanged();
+
+    QNetworkRequest req(
+        QUrl(QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler/releases/latest")));
+    req.setRawHeader("Accept", "application/vnd.github+json");
+    req.setRawHeader("User-Agent", "SmartScheduler-UpdateCheck");
+    QNetworkReply *reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            m_updateStatus = 4;
+            m_updateMessage = tr("自动检查失败（%1）。私有仓库无法匿名查询，请打开发布页查看。")
+                                  .arg(reply->errorString());
+            Q_EMIT updateStatusChanged();
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        const QString tag = doc.object().value(QStringLiteral("tag_name")).toString();
+        if (tag.isEmpty()) {
+            m_updateStatus = 4;
+            m_updateMessage = tr("未能解析发布信息。");
+        } else if (compareVersions(tag, appVersion()) > 0) {
+            m_updateStatus = 3;
+            m_latestVersion = tag;
+            m_updateMessage = tr("发现新版本 %1，建议更新。").arg(tag);
+        } else {
+            m_updateStatus = 2;
+            m_latestVersion = tag;
+            m_updateMessage = tr("当前已是最新版本。");
+        }
+        Q_EMIT updateStatusChanged();
+    });
+}
+
+void AppController::openReleasesPage()
+{
+    QDesktopServices::openUrl(
+        QUrl(QStringLiteral("https://github.com/tangkris1101-alt/SmartScheduler/releases")));
+}
+
+void AppController::openLogDir()
+{
+    const QString dir = QFileInfo(logFilePath()).absolutePath();
+    QDir().mkpath(dir);
+    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+}
+
+bool AppController::exportLog(const QString &pathOrUrl)
+{
+    const QString dest = toLocalPath(pathOrUrl);
+    if (dest.isEmpty())
+        return false;
+    QFile::remove(dest);
+    return QFile::copy(logFilePath(), dest);
 }
