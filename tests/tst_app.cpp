@@ -36,6 +36,7 @@ private Q_SLOTS:
     void dutyModelOps();
     void combinedModelValidation();
     void constraintsAndPreassign();
+    void updateProjectInfo();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -481,6 +482,40 @@ void TestApp::constraintsAndPreassign()
     app.toggleTeacherActivity(ids.tZhang, 19, ids.yuwen);
     QCOMPARE(app.teacherActivities(ids.tZhang).size(), 0);
     QVERIFY(app.projectDirty());
+}
+
+void TestApp::updateProjectInfo()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    DutyModel duty(&app);
+    duty.setCurrentTeacherId(ids.tZhang);
+    duty.setDuty(ids.yuwen, {ids.class1}, 5);
+    app.setNoScheduleSlot(2, ids.tZhang, 0, true);
+    app.togglePreAssignment(ids.class1, ids.yuwen, 10);
+    QCOMPARE(app.constraintCount(), 2);
+
+    // 仅改名/上午节数/学期周数：结构未变，约束保留
+    app.updateProjectInfo(QStringLiteral("改名小学"), 5, 7, 3, 18);
+    QCOMPARE(app.schoolName(), QStringLiteral("改名小学"));
+    QCOMPARE(app.morningPeriods(), 3);
+    QCOMPARE(app.weeksPerTerm(), 18);
+    QCOMPARE(app.constraintCount(), 2);
+    QVERIFY(app.projectDirty());
+
+    // 空名忽略；越界值被钳制
+    app.updateProjectInfo(QStringLiteral("  "), 5, 7, 3, 18);
+    QCOMPARE(app.schoolName(), QStringLiteral("改名小学"));
+    app.updateProjectInfo(QStringLiteral("改名小学"), 5, 7, 99, 99);
+    QCOMPARE(app.morningPeriods(), 7);
+    QCOMPARE(app.weeksPerTerm(), 30);
+    QCOMPARE(app.constraintCount(), 2);
+
+    // 每周天数变化：结构变更，课表与槽位约束清空
+    app.updateProjectInfo(QStringLiteral("改名小学"), 6, 7, 3, 18);
+    QCOMPARE(app.daysPerWeek(), 6);
+    QCOMPARE(app.constraintCount(), 0);
+    QVERIFY(!app.hasSchedule());
 }
 
 void TestApp::schedulerBridge()

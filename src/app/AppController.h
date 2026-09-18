@@ -87,6 +87,9 @@ public:
 
     Q_INVOKABLE void newProject(const QString &name, int daysPerWeek, int periodsPerDay,
                                 int morningPeriods, int weeksPerTerm);
+    // 修改项目基础信息；每周天数/每天节数变化会使既有课表、不排时间、预排、老师活动全部失效并清空
+    Q_INVOKABLE void updateProjectInfo(const QString &name, int daysPerWeek, int periodsPerDay,
+                                       int morningPeriods, int weeksPerTerm);
     // 起始模板：0=空白 1=小学 2=初中 3=高中；须在 newProject 之后调用，填充课程/班级/年级组/教室
     Q_INVOKABLE void applyTemplate(int tpl);
     Q_INVOKABLE bool openProject(const QString &pathOrUrl);

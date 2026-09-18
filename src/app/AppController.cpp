@@ -76,6 +76,42 @@ void AppController::newProject(const QString &name, int daysPerWeek, int periods
     Q_EMIT resultPendingChanged();
 }
 
+void AppController::updateProjectInfo(const QString &name, int daysPerWeek, int periodsPerDay,
+                                      int morningPeriods, int weeksPerTerm)
+{
+    if (!m_hasProject)
+        return;
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return;
+    cancelScheduler();
+    daysPerWeek = std::clamp(daysPerWeek, 1, 7);
+    periodsPerDay = std::clamp(periodsPerDay, 1, 12);
+    morningPeriods = std::clamp(morningPeriods, 0, periodsPerDay);
+    weeksPerTerm = std::clamp(weeksPerTerm, 1, 30);
+
+    const bool structureChanged = daysPerWeek != m_school.timeConfig.daysPerWeek
+                                  || periodsPerDay != m_school.timeConfig.periodsPerDay;
+    m_school.name = trimmed;
+    m_school.timeConfig.daysPerWeek = daysPerWeek;
+    m_school.timeConfig.periodsPerDay = periodsPerDay;
+    m_school.timeConfig.morningPeriods = morningPeriods;
+    m_school.timeConfig.weeksPerTerm = weeksPerTerm;
+
+    if (structureChanged) {
+        // 槽位索引含义改变：既有课表与按槽位记录的约束全部失效
+        m_school.schedule = sched::Schedule();
+        m_school.noScheduleConstraints.clear();
+        m_school.preAssignments.clear();
+        m_school.teacherActivities.clear();
+        discardResult();
+        Q_EMIT scheduleChanged();
+        Q_EMIT constraintsChanged();
+    }
+    markDirty();
+    Q_EMIT projectChanged();
+}
+
 void AppController::applyTemplate(int tpl)
 {
     if (!m_hasProject || tpl <= 0 || tpl > 3)

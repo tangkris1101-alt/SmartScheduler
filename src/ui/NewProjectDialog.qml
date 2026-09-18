@@ -2,15 +2,55 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// 新建项目向导对话框
+// 新建项目向导对话框；editMode 下复用为「项目基础信息」编辑
 Popup {
     id: root
     signal created()
+
+    property bool editMode: false
 
     modal: true
     anchors.centerIn: parent
     width: 460
     padding: 0
+
+    function openCreate() {
+        editMode = false
+        open()
+    }
+
+    function openEdit() {
+        editMode = true
+        nameField.text = app.schoolName
+        daysStepper.value = app.daysPerWeek
+        periodsStepper.value = app.periodsPerDay
+        morningStepper.value = app.morningPeriods
+        weeksStepper.value = app.weeksPerTerm
+        open()
+    }
+
+    function create() {
+        app.newProject(nameField.text, daysStepper.value, periodsStepper.value,
+                       morningStepper.value, weeksStepper.value)
+        app.applyTemplate(templateCombo.currentIndex)
+        root.close()
+        root.created()
+    }
+
+    function save() {
+        const structureChanged = daysStepper.value !== app.daysPerWeek
+                                 || periodsStepper.value !== app.periodsPerDay
+        if (structureChanged && (app.hasSchedule || app.constraintCount > 0))
+            editConfirm.open()
+        else
+            applyEdit()
+    }
+
+    function applyEdit() {
+        app.updateProjectInfo(nameField.text, daysStepper.value, periodsStepper.value,
+                              morningStepper.value, weeksStepper.value)
+        root.close()
+    }
 
     background: Rectangle {
         radius: Theme.radiusL
@@ -32,12 +72,14 @@ Popup {
 
     onOpened: nameField.forceFocus()
 
-    function create() {
-        app.newProject(nameField.text, daysStepper.value, periodsStepper.value,
-                       morningStepper.value, weeksStepper.value)
-        app.applyTemplate(templateCombo.currentIndex)
-        root.close()
-        root.created()
+    // 结构变更确认：课表与槽位约束将清空
+    AppConfirmDialog {
+        id: editConfirm
+        parent: Overlay.overlay
+        title: qsTr("修改作息结构")
+        message: qsTr("修改每周上课天数或每天节数后，已排课表、不排时间、固定预排和老师活动时间将全部失效并清空。确定继续？")
+        okText: qsTr("继续修改")
+        onAccepted: root.applyEdit()
     }
 
     contentItem: ColumnLayout {
@@ -46,7 +88,7 @@ Popup {
         Text {
             Layout.topMargin: Theme.spacingL
             Layout.leftMargin: Theme.spacingXL
-            text: qsTr("新建排课项目")
+            text: root.editMode ? qsTr("项目基础信息") : qsTr("新建排课项目")
             font.pixelSize: Theme.fontTitle
             font.bold: true
             color: Theme.text
@@ -55,7 +97,8 @@ Popup {
             Layout.topMargin: Theme.spacingXS
             Layout.leftMargin: Theme.spacingXL
             Layout.bottomMargin: Theme.spacingM
-            text: qsTr("先设置学校名称与作息结构，之后仍可修改")
+            text: root.editMode ? qsTr("修改学校名称与作息结构")
+                                : qsTr("先设置学校名称与作息结构，之后仍可修改")
             font.pixelSize: Theme.fontCaption
             color: Theme.textSecondary
         }
@@ -74,12 +117,16 @@ Popup {
                 Layout.fillWidth: true
                 placeholder: qsTr("例如：第一中学")
                 showClear: false
-                onAccepted: if (text.length > 0) root.create()
+                onAccepted: if (text.length > 0) root.editMode ? root.save() : root.create()
             }
 
-            Text { text: qsTr("起始模板"); color: Theme.text; font.pixelSize: Theme.fontBody }
+            Text {
+                visible: !root.editMode
+                text: qsTr("起始模板"); color: Theme.text; font.pixelSize: Theme.fontBody
+            }
             AppComboBox {
                 id: templateCombo
+                visible: !root.editMode
                 Layout.fillWidth: true
                 model: [qsTr("空白项目"), qsTr("小学模板"), qsTr("初中模板"), qsTr("高中模板")]
                 currentIndex: 0
@@ -125,10 +172,10 @@ Popup {
                 onClicked: root.close()
             }
             AppButton {
-                text: qsTr("创建项目")
+                text: root.editMode ? qsTr("保存修改") : qsTr("创建项目")
                 variant: "primary"
                 enabled: nameField.text.length > 0
-                onClicked: root.create()
+                onClicked: root.editMode ? root.save() : root.create()
             }
         }
     }

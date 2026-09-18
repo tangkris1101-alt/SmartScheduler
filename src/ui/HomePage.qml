@@ -101,7 +101,13 @@ Flickable {
                     AppButton {
                         text: qsTr("✚ 新建项目")
                         variant: "primary"
-                        onClicked: newProjectDialog.open()
+                        onClicked: newProjectDialog.openCreate()
+                    }
+                    AppButton {
+                        visible: app.hasProject
+                        text: qsTr("✏️ 项目信息")
+                        variant: "subtle"
+                        onClicked: newProjectDialog.openEdit()
                     }
                     AppButton {
                         text: qsTr("📂 打开项目…")
