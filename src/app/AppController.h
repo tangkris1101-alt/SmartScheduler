@@ -35,6 +35,7 @@ class AppController : public QObject
     Q_PROPERTY(int teacherCount READ teacherCount NOTIFY statsChanged)
     Q_PROPERTY(int classroomCount READ classroomCount NOTIFY statsChanged)
     Q_PROPERTY(int planEntryCount READ planEntryCount NOTIFY statsChanged)
+    Q_PROPERTY(int constraintCount READ constraintCount NOTIFY constraintsChanged) // 不排+预排+老师活动
     Q_PROPERTY(int daysPerWeek READ daysPerWeek NOTIFY projectChanged)
     Q_PROPERTY(int periodsPerDay READ periodsPerDay NOTIFY projectChanged)
     Q_PROPERTY(int morningPeriods READ morningPeriods NOTIFY projectChanged)
@@ -74,6 +75,11 @@ public:
     int teacherCount() const { return m_school.teachers.size(); }
     int classroomCount() const { return m_school.classrooms.size(); }
     int planEntryCount() const { return m_school.planEntries.size(); }
+    int constraintCount() const
+    {
+        return m_school.noScheduleConstraints.size() + m_school.preAssignments.size()
+               + m_school.teacherActivities.size();
+    }
     int daysPerWeek() const { return m_school.timeConfig.daysPerWeek; }
     int periodsPerDay() const { return m_school.timeConfig.periodsPerDay; }
     int morningPeriods() const { return m_school.timeConfig.morningPeriods; }

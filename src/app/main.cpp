@@ -388,6 +388,59 @@ int main(int argc, char *argv[])
         });
     }
 
+    // 回归自检：--smoke=close-dirty 脏项目关闭窗口 → 弹确认框 → 点「不保存退出」应真正退出。
+    // 通过=进程随 Qt.quit() 退出（exit 0）；15=确认框未弹出，16=点击后进程仍在（看门狗判定退出失败）
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("close-dirty")) {
+        auto findAllItems = [](QQuickItem *root, const QString &name, QList<QQuickItem *> &out,
+                               auto &&self) -> void {
+            if (!root)
+                return;
+            if (root->objectName() == name)
+                out.append(root);
+            const auto items = root->childItems();
+            for (auto *c : items)
+                self(c, name, out, self);
+        };
+        QTimer::singleShot(1200, &app, [&appController, &app, findAllItems]() mutable {
+            appController.createSampleSchool(false); // 内存中的脏项目
+            QQuickWindow *w = nullptr;
+            const auto windows = QGuiApplication::allWindows();
+            for (auto *win : windows) {
+                auto *qw = qobject_cast<QQuickWindow *>(win);
+                if (qw && qw->property("currentPage").isValid())
+                    w = qw;
+            }
+            if (!w) {
+                app.exit(6);
+                return;
+            }
+            w->close(); // 触发 onClosing 守卫 → 应弹出确认框而非直接关闭
+            QTimer::singleShot(600, &app, [&app, w, findAllItems]() mutable {
+                QList<QQuickItem *> btns;
+                findAllItems(w->contentItem(), QStringLiteral("dlgThirdBtn"), btns, findAllItems);
+                QQuickItem *target = nullptr;
+                for (auto *b : btns) {
+                    if (b->isVisible()
+                        && b->property("text").toString() == QStringLiteral("不保存退出"))
+                        target = b;
+                }
+                if (!target) {
+                    qWarning("smoke-close-dirty: 未找到「不保存退出」按钮（确认框未弹出？）");
+                    app.exit(15);
+                    return;
+                }
+                const QPoint pos =
+                    target->mapToScene(QPointF(target->width() / 2, target->height() / 2)).toPoint();
+                QTest::mouseClick(w, Qt::LeftButton, Qt::NoModifier, pos);
+                // 看门狗：1.5s 后进程仍在 → 退出失败
+                QTimer::singleShot(1500, &app, [&app]() mutable {
+                    qWarning("smoke-close-dirty: 点击「不保存退出」后进程仍在运行 —— 退出失败");
+                    app.exit(16);
+                });
+            });
+        });
+    }
+
     // 回归自检：--smoke=plan-empty 空教学计划状态下，空状态提示应居中于卡片
     // 0 通过，11=页面/组件未找到，12=空状态未居中，13=截图保存失败
     if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("plan-empty")) {

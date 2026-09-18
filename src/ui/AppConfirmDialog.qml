@@ -73,17 +73,20 @@ Popup {
 
             Item { Layout.fillWidth: true }
             AppButton {
+                objectName: "dlgCancelBtn"
                 text: root.cancelText
                 variant: "default"
                 onClicked: { root.close(); root.rejected() }
             }
             AppButton {
+                objectName: "dlgThirdBtn"
                 visible: root.thirdText.length > 0
                 text: root.thirdText
                 variant: "default"
                 onClicked: { root.close(); root.thirdAction() }
             }
             AppButton {
+                objectName: "dlgOkBtn"
                 text: root.okText
                 variant: root.danger ? "danger" : "primary"
                 onClicked: { root.close(); root.accepted() }

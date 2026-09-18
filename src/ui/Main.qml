@@ -44,7 +44,9 @@ ApplicationWindow {
     function stepDone(page) {
         if (page === 1) return app.classCount > 0
         if (page === 2) return groupModel.count > 0
+        if (page === 3) return app.courseCount > 0 && app.teacherCount > 0 // 课程设置：有课程和老师才可配置特征
         if (page === 4) return app.planEntryCount > 0
+        if (page === 5) return app.hasProject && app.constraintCount > 0 // hasProject 让项目切换时重算
         if (page >= 6 && page <= 8) return app.hasSchedule
         return false
     }
@@ -65,8 +67,11 @@ ApplicationWindow {
                                            settingsComp]
 
     // ---- 关闭确认 ----
+    // Qt.quit() 会再次触发窗口关闭事件 → 本守卫会把退出也拦下来；
+    // 「不保存退出」需先置 skipCloseGuard 放行
+    property bool skipCloseGuard: false
     onClosing: function (close) {
-        if (app.projectDirty) {
+        if (app.projectDirty && !win.skipCloseGuard) {
             close.accepted = false
             closeDialog.open()
         }
@@ -99,7 +104,10 @@ ApplicationWindow {
                 saveAsDialog.open()
             }
         }
-        onThirdAction: Qt.quit()
+        onThirdAction: {
+            win.skipCloseGuard = true // 用户明确放弃修改，放行关闭事件
+            Qt.quit()
+        }
     }
 
     // 首次启动显示新手引导
