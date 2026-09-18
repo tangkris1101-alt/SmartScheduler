@@ -998,6 +998,15 @@ void TestApp::versionAndUpdate()
     QVERIFY(!app.qtVersion().isEmpty());
     QCOMPARE(app.updateStatus(), 0); // 未检查
     QVERIFY(!app.logFilePath().isEmpty());
+
+    // 更新批处理：延迟 + 带引号的安装包路径 + Inno 静默旗标；CRLF 行尾；绝无 \" 转义残留
+    const QString bat =
+        AppController::updateBatchContent(QStringLiteral("C:\\临时 目录\\SmartScheduler-setup.exe"));
+    QVERIFY(bat.contains(QStringLiteral(
+        "\"C:\\临时 目录\\SmartScheduler-setup.exe\" /VERYSILENT /NORESTART /CLOSEAPPLICATIONS")));
+    QVERIFY(bat.contains(QStringLiteral("ping 127.0.0.1")));
+    QVERIFY(bat.contains(QStringLiteral("\r\n")));
+    QVERIFY(!bat.contains(QStringLiteral("\\\"")));
 }
 
 void TestApp::logExport()

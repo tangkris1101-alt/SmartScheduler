@@ -171,6 +171,8 @@ public:
 
     // 语义化版本比较：忽略 v/V 前缀，按 . 分段数值比较；a>b 返回 1，相等 0，a<b 返回 -1
     static int compareVersions(const QString &a, const QString &b);
+    // 生成更新用批处理内容：延迟等本程序退出后静默拉起安装包（独立成静态函数便于测试）
+    static QString updateBatchContent(const QString &setupPath);
 
 Q_SIGNALS:
     void projectChanged();

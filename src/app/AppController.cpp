@@ -1320,13 +1320,34 @@ void AppController::installUpdate()
 {
     if (m_updateDlState != 2 || m_downloadedSetup.isEmpty())
         return;
-    // 本程序退出前文件锁未释放：用 cmd 延迟约 2 秒再拉起安装包。
-    // /VERYSILENT 静默覆盖旧版，/NORESTART 不重启系统，/CLOSEAPPLICATIONS 兜底关残留进程
-    const QString cmd = QStringLiteral("ping 127.0.0.1 -n 3 >nul & start \"\" /wait \"%1\" "
-                                       "/VERYSILENT /NORESTART /CLOSEAPPLICATIONS")
-                            .arg(m_downloadedSetup);
-    QProcess::startDetached(QStringLiteral("cmd.exe"), {QStringLiteral("/c"), cmd});
+    // 不能把带引号的复合命令直接塞给 cmd.exe /c：QProcess 会做一层 MSVC 式
+    // 引号转义（\"），cmd 不识别这种转义，曾把 start 的参数错误解析成「\\」。
+    // 改为把命令写进 .bat（内容所见即所得；按系统本地编码写入以兼容中文用户名路径），
+    // 再启动这个批处理——路径作为无内嵌引号的单一参数，QProcess 加引号是安全的。
+    const QString batPath =
+        QFileInfo(m_downloadedSetup).dir().filePath(QStringLiteral("run-update.bat"));
+    QFile f(batPath);
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        f.write(updateBatchContent(m_downloadedSetup).toLocal8Bit());
+        f.close();
+        QProcess::startDetached(QStringLiteral("cmd.exe"), {QStringLiteral("/c"), batPath});
+    } else {
+        // 兜底：批处理写失败则直接拉起安装器（无延迟，交给 Inno /CLOSEAPPLICATIONS 处理）
+        qWarning("自动更新: 无法写入 %s，改为直接启动安装器", qPrintable(batPath));
+        QProcess::startDetached(m_downloadedSetup,
+                                {QStringLiteral("/VERYSILENT"), QStringLiteral("/NORESTART"),
+                                 QStringLiteral("/CLOSEAPPLICATIONS")});
+    }
     QMetaObject::invokeMethod(QCoreApplication::instance(), "quit", Qt::QueuedConnection);
+}
+
+QString AppController::updateBatchContent(const QString &setupPath)
+{
+    // ping 延迟约 2 秒等本程序退出释放文件锁；Inno 旗标：静默覆盖、不重启、兜底关残留进程
+    return QStringLiteral("@echo off\r\n"
+                          "ping 127.0.0.1 -n 3 >nul\r\n"
+                          "\"%1\" /VERYSILENT /NORESTART /CLOSEAPPLICATIONS\r\n")
+        .arg(setupPath);
 }
 
 void AppController::openReleasesPage()
