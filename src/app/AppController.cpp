@@ -3,15 +3,19 @@
 #include "ExcelIo.h"
 #include "SchedulerEngine.h"
 
+#include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QUrl>
@@ -1087,7 +1091,15 @@ void AppController::checkUpdate()
         m_nam = new QNetworkAccessManager(this);
     m_updateStatus = 1;
     m_updateMessage.clear();
+    // 重新检查会让旧的下载结果失效
+    m_updateDlState = 0;
+    m_updateDlPercent = 0;
+    m_updateDlMessage.clear();
+    m_downloadedSetup.clear();
+    m_latestSha256.clear();
+    m_latestSize = 0;
     Q_EMIT updateStatusChanged();
+    Q_EMIT updateDlStateChanged();
 
     // 国内直连 GitHub 不稳定：优先公益反代拉取公开仓的 version.json（实时无缓存、国内可达，
     // 发布流水线每次发版写入）；其次 GitHub API 直连；最后 jsDelivr CDN（有缓存，兜底用）。
@@ -1136,9 +1148,26 @@ void AppController::tryUpdateSource()
             tryUpdateSource();
             return;
         }
-        const QString setup = obj.value(QStringLiteral("setup")).toString();
-        if (!setup.isEmpty())
-            m_latestSetup = setup;
+        // 安装包文件名：version.json 直接给；GitHub API 通道按 tag 推导
+        QString setup = obj.value(QStringLiteral("setup")).toString();
+        if (setup.isEmpty())
+            setup = QStringLiteral("SmartScheduler-%1-setup.exe").arg(QString(tag).mid(1));
+        m_latestSetup = setup;
+        // 完整性校验信息：version.json 带 sha256/size；GitHub API 在 asset.digest 里
+        m_latestSha256 = obj.value(QStringLiteral("sha256")).toString();
+        m_latestSize = obj.value(QStringLiteral("size")).toVariant().toLongLong();
+        if (m_latestSha256.isEmpty()) {
+            const auto assets = obj.value(QStringLiteral("assets")).toArray();
+            for (const auto &a : assets) {
+                const auto ao = a.toObject();
+                if (ao.value(QStringLiteral("name")).toString() == setup) {
+                    const QString digest = ao.value(QStringLiteral("digest")).toString();
+                    if (digest.startsWith(QStringLiteral("sha256:")))
+                        m_latestSha256 = digest.mid(7);
+                    break;
+                }
+            }
+        }
         if (compareVersions(tag, appVersion()) > 0) {
             m_updateStatus = 3;
             m_latestVersion = tag;
@@ -1165,6 +1194,139 @@ void AppController::openMirrorDownload()
         QUrl(QStringLiteral("https://ghfast.top/https://github.com/tangkris1101-alt/"
                             "SmartScheduler-Releases/releases/download/%1/%2")
                  .arg(m_latestVersion, setup)));
+}
+
+void AppController::downloadUpdate()
+{
+    if (m_updateDlState == 1) // 下载中，防重复点击
+        return;
+    if (m_latestVersion.isEmpty()) {
+        m_updateDlState = 3;
+        m_updateDlMessage = tr("请先点击「检查更新」获取版本信息。");
+        Q_EMIT updateDlStateChanged();
+        return;
+    }
+    if (!m_nam)
+        m_nam = new QNetworkAccessManager(this);
+    QString setup = m_latestSetup;
+    if (setup.isEmpty())
+        setup = QStringLiteral("SmartScheduler-%1-setup.exe").arg(QString(m_latestVersion).mid(1));
+
+    // 与检查更新同源的镜像链：反代优先，GitHub 直连兜底；任一通道失败/校验不过自动回退
+    const QString dl = QStringLiteral(
+        "https://github.com/tangkris1101-alt/SmartScheduler-Releases/releases/download/%1/%2")
+                           .arg(m_latestVersion, setup);
+    m_downloadUrls = {
+        QStringLiteral("https://ghfast.top/") + dl,
+        QStringLiteral("https://gh-proxy.com/") + dl,
+        QStringLiteral("https://ghproxy.net/") + dl,
+        dl,
+    };
+    m_dlAttempt = 0;
+    m_updateDlState = 1;
+    m_updateDlPercent = 0;
+    m_updateDlMessage.clear();
+    m_downloadedSetup.clear();
+    Q_EMIT updateDlStateChanged();
+    tryUpdateDownload();
+}
+
+void AppController::tryUpdateDownload()
+{
+    if (m_dlAttempt >= m_downloadUrls.size()) {
+        m_updateDlState = 3;
+        m_updateDlMessage = tr("自动下载失败（已依次尝试镜像加速与 GitHub 直连），"
+                               "请检查网络后重试，或改用浏览器下载。");
+        Q_EMIT updateDlStateChanged();
+        return;
+    }
+    const QString url = m_downloadUrls.at(m_dlAttempt++);
+    const QString setup = m_latestSetup;
+    QDir tmp = QDir::temp();
+    tmp.mkpath(QStringLiteral("SmartScheduler-update"));
+    const QString dst = tmp.filePath(QStringLiteral("SmartScheduler-update/") + setup);
+
+    QNetworkRequest req{QUrl(url)};
+    req.setRawHeader("User-Agent", "SmartScheduler-Updater");
+    req.setTransferTimeout(20000); // 20s 无传输即判失败，换下一通道
+    QNetworkReply *reply = m_nam->get(req);
+    auto *file = new QFile(dst);
+    if (!file->open(QIODevice::WriteOnly)) {
+        reply->abort();
+        reply->deleteLater();
+        delete file;
+        m_updateDlState = 3;
+        m_updateDlMessage = tr("无法写入临时目录：%1").arg(dst);
+        Q_EMIT updateDlStateChanged();
+        return;
+    }
+    connect(reply, &QNetworkReply::readyRead, this, [reply, file]() {
+        file->write(reply->readAll());
+    });
+    connect(reply, &QNetworkReply::downloadProgress, this, [this](qint64 got, qint64 total) {
+        const qint64 denom = total > 0 ? total : m_latestSize;
+        if (denom > 0) {
+            m_updateDlPercent = int(got * 100 / denom);
+            Q_EMIT updateDlStateChanged();
+        }
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, file, dst, url]() {
+        reply->deleteLater();
+        file->write(reply->readAll());
+        file->close();
+        const auto err = reply->error();
+        delete file;
+        if (err != QNetworkReply::NoError) {
+            qWarning("自动更新: 通道 %s 下载失败（%s），尝试下一通道", qPrintable(url),
+                     qPrintable(reply->errorString()));
+            QFile::remove(dst);
+            tryUpdateDownload();
+            return;
+        }
+        // 安装包不可能小于 5MB：小于即视为镜像返回了错误页，换通道
+        const qint64 fs = QFileInfo(dst).size();
+        if (fs < 5 * 1024 * 1024) {
+            qWarning("自动更新: 通道 %s 内容过小（%lld 字节），尝试下一通道", qPrintable(url),
+                     (long long)fs);
+            QFile::remove(dst);
+            tryUpdateDownload();
+            return;
+        }
+        // sha256 校验（version.json / GitHub API 提供时）
+        if (!m_latestSha256.isEmpty()) {
+            QFile f(dst);
+            if (!f.open(QIODevice::ReadOnly)
+                || QString::fromLatin1(QCryptographicHash::hash(f.readAll(),
+                                                                QCryptographicHash::Sha256)
+                                           .toHex())
+                           .compare(m_latestSha256, Qt::CaseInsensitive)
+                       != 0) {
+                qWarning("自动更新: 通道 %s sha256 校验未通过，尝试下一通道", qPrintable(url));
+                QFile::remove(dst);
+                tryUpdateDownload();
+                return;
+            }
+        }
+        qWarning("自动更新: 通道 %s 下载完成（%lld 字节）", qPrintable(url), (long long)fs);
+        m_downloadedSetup = dst;
+        m_updateDlPercent = 100;
+        m_updateDlState = 2;
+        m_updateDlMessage = tr("下载完成，校验通过。");
+        Q_EMIT updateDlStateChanged();
+    });
+}
+
+void AppController::installUpdate()
+{
+    if (m_updateDlState != 2 || m_downloadedSetup.isEmpty())
+        return;
+    // 本程序退出前文件锁未释放：用 cmd 延迟约 2 秒再拉起安装包。
+    // /VERYSILENT 静默覆盖旧版，/NORESTART 不重启系统，/CLOSEAPPLICATIONS 兜底关残留进程
+    const QString cmd = QStringLiteral("ping 127.0.0.1 -n 3 >nul & start \"\" /wait \"%1\" "
+                                       "/VERYSILENT /NORESTART /CLOSEAPPLICATIONS")
+                            .arg(m_downloadedSetup);
+    QProcess::startDetached(QStringLiteral("cmd.exe"), {QStringLiteral("/c"), cmd});
+    QMetaObject::invokeMethod(QCoreApplication::instance(), "quit", Qt::QueuedConnection);
 }
 
 void AppController::openReleasesPage()

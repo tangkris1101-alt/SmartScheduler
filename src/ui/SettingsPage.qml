@@ -128,18 +128,27 @@ Item {
                         spacing: Theme.spacingM
                         AppButton {
                             text: app.updateStatus === 1 ? qsTr("检查中…") : qsTr("检查更新")
-                            variant: "primary"
+                            variant: app.updateStatus === 3 ? "default" : "primary"
                             enabled: app.updateStatus !== 1
                             onClicked: app.checkUpdate()
                         }
                         AppButton {
                             visible: app.updateStatus === 3
-                            text: qsTr("前往下载")
-                            onClicked: app.openReleasesPage()
+                            variant: "primary"
+                            enabled: app.updateDlState !== 1
+                            text: app.updateDlState === 2 ? qsTr("✔ 安装更新")
+                                : app.updateDlState === 1 ? qsTr("下载中…")
+                                : qsTr("⬇ 自动下载并安装")
+                            onClicked: {
+                                if (app.updateDlState === 2)
+                                    installConfirm.open()
+                                else
+                                    app.downloadUpdate()
+                            }
                         }
                         AppButton {
-                            visible: app.updateStatus === 3
-                            text: qsTr("镜像加速下载")
+                            visible: app.updateStatus === 3 && app.updateDlState !== 2
+                            text: qsTr("浏览器下载")
                             onClicked: app.openMirrorDownload()
                         }
                         AppButton {
@@ -148,6 +157,47 @@ Item {
                             onClicked: app.openReleasesPage()
                         }
                         Item { Layout.fillWidth: true }
+                    }
+
+                    // 下载进度（镜像加速通道）
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.spacingXS
+                        visible: app.updateDlState === 1
+                        Rectangle {
+                            Layout.fillWidth: true
+                            height: 8
+                            radius: 4
+                            color: Theme.surfaceAlt
+                            Rectangle {
+                                height: parent.height
+                                radius: 4
+                                color: Theme.primary
+                                width: parent.width * app.updateDlPercent / 100
+                                Behavior on width { NumberAnimation { duration: 150 } }
+                            }
+                        }
+                        Text {
+                            text: qsTr("正在通过镜像加速下载安装包 %1% …").arg(app.updateDlPercent)
+                            color: Theme.textSecondary
+                            font.pixelSize: Theme.fontCaption
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: app.updateDlState === 2
+                        text: qsTr("✓ 安装包已下载并校验通过。点击「安装更新」后将关闭本程序并自动完成安装。")
+                        color: Theme.success
+                        font.pixelSize: Theme.fontCaption
+                        wrapMode: Text.WordWrap
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: app.updateDlState === 3
+                        text: app.updateDlMessage
+                        color: Theme.danger
+                        font.pixelSize: Theme.fontCaption
+                        wrapMode: Text.WordWrap
                     }
                 }
             }
@@ -259,6 +309,33 @@ Item {
             const ok = app.exportLog(selectedFile.toString())
             root.exportMsg = ok ? qsTr("已导出：%1").arg(selectedFile.toString())
                                 : qsTr("导出失败，请检查目标路径是否可写")
+        }
+    }
+
+    // 安装更新确认：先保存未保存的项目，再启动静默安装并退出
+    AppConfirmDialog {
+        id: installConfirm
+        parent: Overlay.overlay
+        title: qsTr("安装更新")
+        message: qsTr("将关闭智排课系统并自动安装 %1，完成后可从开始菜单或桌面快捷方式重新打开。")
+                     .arg(app.latestVersion)
+                 + (app.projectDirty ? qsTr("\n当前项目有未保存更改，将先为您保存。") : "")
+        okText: qsTr("开始安装")
+        onAccepted: {
+            if (app.projectDirty && !app.saveProject()) {
+                installSaveAs.open() // 从未保存过的项目需先选路径
+            } else {
+                app.installUpdate()
+            }
+        }
+    }
+    FileDialog {
+        id: installSaveAs
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("SmartScheduler 项目 (*.spk)")]
+        onAccepted: {
+            if (app.saveProjectAs(selectedFile.toString()))
+                app.installUpdate()
         }
     }
 }

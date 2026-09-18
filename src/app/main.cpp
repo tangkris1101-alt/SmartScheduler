@@ -543,5 +543,63 @@ int main(int argc, char *argv[])
             });
     }
 
+    // 回归自检：--smoke=download 真实走「检查更新 → 镜像链下载安装包」全流程。
+    // 版本相等也照下（只验证下载链路本身），文件落在 %TEMP%/SmartScheduler-update。
+    // 0 通过，21=检查更新失败，22=下载失败，23=超时，24=落盘文件异常
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("download")) {
+        auto *stage = new int(0);
+        auto *ticks = new int(0);
+        QTimer *timer = new QTimer(&app);
+        QObject::connect(timer, &QTimer::timeout, &app, [&appController, &app, stage, ticks, timer]() {
+            if (++(*ticks) > 180) {
+                timer->stop();
+                qWarning("smoke-download: 超时 stage=%d", *stage);
+                app.exit(23);
+                return;
+            }
+            if (*stage == 0) {
+                if (*ticks == 1) {
+                    appController.checkUpdate();
+                    return;
+                }
+                const int us = appController.updateStatus();
+                if (us == 1 || us == 0)
+                    return; // 仍在检查
+                if (us == 4) {
+                    timer->stop();
+                    qWarning("smoke-download: 检查更新失败 %s",
+                             qPrintable(appController.updateMessage()));
+                    app.exit(21);
+                    return;
+                }
+                qWarning("smoke-download: 最新版 %s，开始下载",
+                         qPrintable(appController.latestVersion()));
+                appController.downloadUpdate();
+                *stage = 1;
+                return;
+            }
+            const int ds = appController.updateDlState();
+            if (ds == 1)
+                return; // 下载中
+            timer->stop();
+            if (ds == 3) {
+                qWarning("smoke-download: 下载失败 %s",
+                         qPrintable(appController.updateDlMessage()));
+                app.exit(22);
+                return;
+            }
+            // ds == 2：验证落盘文件
+            const QDir d(QDir::temp().filePath(QStringLiteral("SmartScheduler-update")));
+            const auto exes = d.entryList({QStringLiteral("*.exe")}, QDir::Files);
+            qint64 fs = 0;
+            if (!exes.isEmpty())
+                fs = QFileInfo(d.filePath(exes.first())).size();
+            qWarning("smoke-download: 就绪，文件=%s 大小=%lld", qPrintable(exes.value(0)),
+                     (long long)fs);
+            app.exit(!exes.isEmpty() && fs > 5 * 1024 * 1024 ? 0 : 24);
+        });
+        timer->start(1000);
+    }
+
     return app.exec();
 }

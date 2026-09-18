@@ -54,6 +54,10 @@ class AppController : public QObject
     Q_PROPERTY(int updateStatus READ updateStatus NOTIFY updateStatusChanged)
     Q_PROPERTY(QString latestVersion READ latestVersion NOTIFY updateStatusChanged)
     Q_PROPERTY(QString updateMessage READ updateMessage NOTIFY updateStatusChanged)
+    // ---- 应用内自动更新：镜像链下载 + 校验 + 静默安装 ----
+    Q_PROPERTY(int updateDlState READ updateDlState NOTIFY updateDlStateChanged)
+    Q_PROPERTY(int updateDlPercent READ updateDlPercent NOTIFY updateDlStateChanged)
+    Q_PROPERTY(QString updateDlMessage READ updateDlMessage NOTIFY updateDlStateChanged)
     Q_PROPERTY(QString logFilePath READ logFilePath CONSTANT)
 
 public:
@@ -152,11 +156,16 @@ public:
     int updateStatus() const { return m_updateStatus; } // 0未检查 1检查中 2已最新 3有新版本 4失败
     QString latestVersion() const { return m_latestVersion; }
     QString updateMessage() const { return m_updateMessage; }
+    int updateDlState() const { return m_updateDlState; } // 0未下载 1下载中 2已就绪(可安装) 3失败
+    int updateDlPercent() const { return m_updateDlPercent; }
+    QString updateDlMessage() const { return m_updateDlMessage; }
     QString logFilePath() const;
 
     Q_INVOKABLE void checkUpdate();
     Q_INVOKABLE void openReleasesPage();
     Q_INVOKABLE void openMirrorDownload(); // 国内镜像加速下载最新安装包
+    Q_INVOKABLE void downloadUpdate();     // 镜像链下载安装包到临时目录并校验
+    Q_INVOKABLE void installUpdate();      // 启动安装程序（静默覆盖）并退出本程序
     Q_INVOKABLE void openLogDir();
     Q_INVOKABLE bool exportLog(const QString &pathOrUrl);
 
@@ -177,6 +186,7 @@ Q_SIGNALS:
     void importPendingChanged();
     void printSettingsChanged();
     void updateStatusChanged();
+    void updateDlStateChanged();
 
 private:
     static QString toLocalPath(const QString &pathOrUrl);
@@ -216,4 +226,15 @@ private:
     QStringList m_updateSources; // 更新检查通道（按国内可达性排序，逐个回退）
     int m_updateAttempt = 0;
     void tryUpdateSource();
+
+    // 自动更新：下载 → 校验 → 静默安装
+    int m_updateDlState = 0;
+    int m_updateDlPercent = 0;
+    QString m_updateDlMessage;
+    QString m_latestSha256;     // version.json / GitHub API 提供的安装包 sha256（可空）
+    qint64 m_latestSize = 0;    // version.json 提供的安装包字节数（无 Content-Length 时兜底进度）
+    QString m_downloadedSetup;  // 已下载并校验通过的安装包路径
+    QStringList m_downloadUrls; // 安装包下载通道（镜像优先，逐个回退）
+    int m_dlAttempt = 0;
+    void tryUpdateDownload();
 };
