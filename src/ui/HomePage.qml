@@ -10,6 +10,7 @@ Flickable {
     contentWidth: width
     clip: true
     boundsBehavior: Flickable.StopAtBounds
+    property bool openImportAfterCreate: false
 
     function navigateTo(page) {
         const w = ApplicationWindow.window
@@ -143,7 +144,7 @@ Flickable {
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: qsTr("3 分钟上手：创建示例学校立即体验完整流程，或下载 Excel 模板批量导入你的数据")
+                            text: qsTr("3 分钟上手：创建示例学校立即体验完整流程；或先新建项目，再用 Excel 模板批量导入你的数据")
                             color: Theme.text
                             font.pixelSize: Theme.fontBody
                             wrapMode: Text.WordWrap
@@ -155,8 +156,12 @@ Flickable {
                         }
                         AppButton {
                             text: qsTr("📥 Excel 导入")
-                            enabled: app.hasProject
-                            onClicked: homeImportDialog.open()
+                            onClicked: {
+                                if (app.hasProject)
+                                    homeImportDialog.open()
+                                else
+                                    importGuardDialog.open()
+                            }
                         }
                     }
                 }
@@ -278,7 +283,26 @@ Flickable {
     NewProjectDialog {
         id: newProjectDialog
         parent: Overlay.overlay
-        onCreated: root.navigateTo(1)
+        onCreated: {
+            root.navigateTo(1)
+            if (root.openImportAfterCreate) {
+                root.openImportAfterCreate = false
+                homeImportDialog.open()
+            }
+        }
+    }
+
+    // 未建项目时点 Excel 导入：说明前提并引导新建，创建后直接接续导入
+    AppConfirmDialog {
+        id: importGuardDialog
+        parent: Overlay.overlay
+        title: qsTr("还没有打开的项目")
+        message: qsTr("Excel 导入会把表格数据灌入当前项目。请先新建一个项目（可选小学/初中/高中模板起步），创建完成后即可导入。")
+        okText: qsTr("新建项目并导入")
+        onAccepted: {
+            root.openImportAfterCreate = true
+            newProjectDialog.open()
+        }
     }
 
     ImportExcelDialog {

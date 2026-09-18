@@ -1,8 +1,10 @@
 import QtQuick
 
 // 主题化按钮：variant = primary | default | subtle | danger
+// 键盘可达：Tab 聚焦（焦点环）、Space/Enter 触发；对读屏暴露为 Button
 Rectangle {
     id: root
+    objectName: "appButton"
     property string text: ""
     property string variant: "default"
     property bool enabled: true
@@ -12,8 +14,17 @@ Rectangle {
     implicitHeight: 34
     radius: Theme.radiusM
     opacity: root.enabled ? 1.0 : 0.45
-    border.width: root.variant === "default" ? 1 : 0
-    border.color: Theme.border
+    activeFocusOnTab: root.enabled
+    border.width: root.activeFocus ? 2 : (root.variant === "default" ? 1 : 0)
+    border.color: root.activeFocus ? Theme.primary : Theme.border
+
+    Accessible.role: Accessible.Button
+    Accessible.name: root.text
+    Accessible.onPressAction: if (root.enabled) root.clicked()
+
+    Keys.onSpacePressed: if (root.enabled) root.clicked()
+    Keys.onReturnPressed: if (root.enabled) root.clicked()
+    Keys.onEnterPressed: if (root.enabled) root.clicked()
 
     color: {
         if (!root.enabled)

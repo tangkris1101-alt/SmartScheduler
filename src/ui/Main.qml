@@ -19,18 +19,35 @@ ApplicationWindow {
 
     property int currentPage: 0
 
+    // 导航模型：按工作流分三组，step>0 的项显示步骤序号徽标，完成时变绿勾
     readonly property var navModel: [
-        { icon: "🏠", label: qsTr("首页") },
-        { icon: "📋", label: qsTr("名单管理") },
-        { icon: "🏷️", label: qsTr("归类分组") },
-        { icon: "⚙️", label: qsTr("课程设置") },
-        { icon: "📅", label: qsTr("教学计划") },
-        { icon: "🚫", label: qsTr("限制条件") },
-        { icon: "▶️", label: qsTr("自动排课") },
-        { icon: "📊", label: qsTr("课表查看") },
-        { icon: "🖨️", label: qsTr("打印输出") },
-        { icon: "🛠️", label: qsTr("设置") }
+        { page: 0, group: "_top",    icon: "🏠", label: qsTr("首页"),     step: 0 },
+        { page: 1, group: "_prep",   icon: "📋", label: qsTr("名单管理"), step: 1 },
+        { page: 2, group: "_prep",   icon: "🏷️", label: qsTr("归类分组"), step: 2 },
+        { page: 3, group: "_prep",   icon: "⚙️", label: qsTr("课程设置"), step: 3 },
+        { page: 4, group: "_plan",   icon: "📅", label: qsTr("教学计划"), step: 4 },
+        { page: 5, group: "_plan",   icon: "🚫", label: qsTr("限制条件"), step: 5 },
+        { page: 6, group: "_output", icon: "▶️", label: qsTr("自动排课"), step: 6 },
+        { page: 7, group: "_output", icon: "📊", label: qsTr("课表查看"), step: 7 },
+        { page: 8, group: "_output", icon: "🖨️", label: qsTr("打印输出"), step: 8 },
+        { page: 9, group: "_bottom", icon: "🛠️", label: qsTr("设置"),     step: 0 }
     ]
+
+    function navGroupTitle(group) {
+        if (group === "_prep")   return qsTr("数据准备")
+        if (group === "_plan")   return qsTr("计划与约束")
+        if (group === "_output") return qsTr("排课与输出")
+        return ""
+    }
+
+    // 步骤完成判定：用真实数据状态驱动徽标变勾
+    function stepDone(page) {
+        if (page === 1) return app.classCount > 0
+        if (page === 2) return groupModel.count > 0
+        if (page === 4) return app.planEntryCount > 0
+        if (page >= 6 && page <= 8) return app.hasSchedule
+        return false
+    }
 
     // ---- 页面组件（StackLayout 顺序与导航一致）----
     Component { id: homeComp; HomePage {} }
@@ -247,6 +264,25 @@ ApplicationWindow {
                     clip: true
                     spacing: 2
 
+                    // 分组小标题（_top/_bottom 为占位组，不显示标题）
+                    section.property: "group"
+                    section.criteria: ViewSection.FullString
+                    section.delegate: Item {
+                        width: nav.width
+                        height: win.navGroupTitle(section).length > 0 ? 32 : 0
+                        Text {
+                            visible: win.navGroupTitle(section).length > 0
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spacingM
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 4
+                            text: win.navGroupTitle(section)
+                            color: Theme.textDisabled
+                            font.pixelSize: Theme.fontCaption
+                            font.bold: true
+                        }
+                    }
+
                     highlight: Rectangle {
                         radius: Theme.radiusM
                         color: Theme.selectedBg
@@ -257,20 +293,33 @@ ApplicationWindow {
 
                     delegate: Item {
                         id: navItem
+                        objectName: "navItem"
                         required property int index
                         required property var modelData
+                        property int page: modelData.page
                         width: nav.width
                         height: 44
+                        activeFocusOnTab: true
+
+                        Accessible.role: Accessible.Button
+                        Accessible.name: modelData.label
+                            + (modelData.step > 0 ? qsTr("，第 %1 步").arg(modelData.step) : "")
+                            + (modelData.step > 0 && win.stepDone(modelData.page) ? qsTr("，已完成") : "")
+                        Accessible.onPressAction: win.currentPage = navItem.page
+
+                        Keys.onSpacePressed: win.currentPage = navItem.page
+                        Keys.onReturnPressed: win.currentPage = navItem.page
+                        Keys.onEnterPressed: win.currentPage = navItem.page
 
                         Rectangle {
                             anchors.fill: parent
                             radius: Theme.radiusM
-                            visible: navItem.index !== win.currentPage
+                            visible: navItem.page !== win.currentPage
                             color: navHover.containsMouse ? Theme.overlayHover : "transparent"
                             Behavior on color { ColorAnimation { duration: 100 } }
                         }
                         Rectangle {
-                            visible: navItem.index === win.currentPage
+                            visible: navItem.page === win.currentPage
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
                             width: 3
@@ -278,9 +327,40 @@ ApplicationWindow {
                             radius: 1.5
                             color: Theme.primary
                         }
+                        // 键盘焦点环
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: Theme.radiusM
+                            visible: navItem.activeFocus
+                            color: "transparent"
+                            border.width: 2
+                            border.color: Theme.primary
+                        }
+                        // 步骤序号徽标：未完成灰圈数字，完成绿底白勾
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spacingM - 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: navItem.modelData.step > 0
+                            width: 18
+                            height: 18
+                            radius: 9
+                            property bool done: win.stepDone(navItem.modelData.page)
+                            color: done ? Theme.success : "transparent"
+                            border.color: done ? Theme.success : Theme.textDisabled
+                            border.width: 1.5
+                            Text {
+                                anchors.centerIn: parent
+                                text: parent.done ? "✓" : String(navItem.modelData.step)
+                                color: parent.done ? Theme.onPrimary : Theme.textDisabled
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+                        }
                         Text {
                             anchors.left: parent.left
                             anchors.leftMargin: Theme.spacingM + 4
+                                                + (navItem.modelData.step > 0 ? 20 : 0)
                             anchors.verticalCenter: parent.verticalCenter
                             text: navItem.modelData.icon
                             font.pixelSize: Theme.fontSubtitle
@@ -290,8 +370,8 @@ ApplicationWindow {
                             anchors.verticalCenter: parent.verticalCenter
                             text: navItem.modelData.label
                             font.pixelSize: Theme.fontBody
-                            font.bold: navItem.index === win.currentPage
-                            color: navItem.index === win.currentPage ? Theme.primary : Theme.text
+                            font.bold: navItem.page === win.currentPage
+                            color: navItem.page === win.currentPage ? Theme.primary : Theme.text
                             Behavior on color { ColorAnimation { duration: 120 } }
                         }
                         MouseArea {
@@ -299,7 +379,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: win.currentPage = navItem.index
+                            onClicked: win.currentPage = navItem.page
                         }
                     }
                 }

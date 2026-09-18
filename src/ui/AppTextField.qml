@@ -17,6 +17,9 @@ Rectangle {
     border.color: input.activeFocus ? Theme.primary : Theme.border
     Behavior on border.color { ColorAnimation { duration: 120 } }
 
+    Accessible.role: Accessible.EditableText
+    Accessible.name: root.placeholder
+
     TextInput {
         id: input
         anchors.fill: parent
@@ -27,6 +30,7 @@ Rectangle {
         font.pixelSize: Theme.fontBody
         selectByMouse: true
         clip: true
+        activeFocusOnTab: true
         onAccepted: root.accepted()
 
         Text {

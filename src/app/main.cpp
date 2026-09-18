@@ -433,5 +433,58 @@ int main(int argc, char *argv[])
             });
     }
 
+    // 回归自检：--smoke=tab 键盘可达性 —— 注入 Tab 键验证焦点能进入工具栏按钮与左侧导航，
+    // 并在导航项上按 Space 验证页面切换。0 通过，14=导航未获得焦点，15=Space 切换失败，16=按钮未获得焦点
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("tab")) {
+        QTimer::singleShot(1200, &app, [&app]() {
+            QQuickWindow *w = nullptr;
+            const auto windows = QGuiApplication::allWindows();
+            for (auto *win : windows) {
+                auto *qw = qobject_cast<QQuickWindow *>(win);
+                if (qw && qw->property("currentPage").isValid())
+                    w = qw;
+            }
+            if (!w) {
+                app.exit(14);
+                return;
+            }
+            struct TabState { int tries = 0; bool sawNav = false; bool sawButton = false;
+                              bool spaced = false; bool spaceOk = false; };
+            auto *st = new TabState;
+            QTimer *timer = new QTimer(&app);
+            QObject::connect(timer, &QTimer::timeout, &app, [&app, w, st, timer]() {
+                // 先检查上一次按键后的焦点，再发下一次按键
+                if (st->tries > 0) {
+                    auto *fi = w->activeFocusItem();
+                    const QString name = fi ? fi->objectName() : QString();
+                    qWarning("smoke-tab: 第%d次 Tab 焦点在 %s", st->tries, qPrintable(name));
+                    if (name == QLatin1String("appButton"))
+                        st->sawButton = true;
+                    if (name == QLatin1String("navItem")) {
+                        st->sawNav = true;
+                        if (!st->spaced && fi->property("page").toInt() == 1) {
+                            st->spaced = true;
+                            QTest::keyClick(w, Qt::Key_Space);
+                            st->spaceOk = (w->property("currentPage").toInt() == 1);
+                        }
+                    }
+                }
+                if (st->tries >= 40) {
+                    timer->stop();
+                    qWarning("smoke-tab: sawNav=%d sawButton=%d spaceOk=%d", st->sawNav,
+                             st->sawButton, st->spaceOk);
+                    if (!st->sawNav) { app.exit(14); return; }
+                    if (!st->sawButton) { app.exit(16); return; }
+                    if (!st->spaceOk) { app.exit(15); return; }
+                    app.exit(0);
+                    return;
+                }
+                ++st->tries;
+                QTest::keyClick(w, Qt::Key_Tab);
+            });
+            timer->start(30);
+        });
+    }
+
     return app.exec();
 }

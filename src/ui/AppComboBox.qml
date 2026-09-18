@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 
 // 下拉选择：model 为字符串数组
+// 键盘可达：Tab 聚焦（焦点描边）、Space/Enter 展开、↑/↓ 直接切换选项；对读屏暴露为 ComboBox
 Rectangle {
     id: root
     property var model: []
@@ -11,9 +12,32 @@ Rectangle {
     implicitWidth: 160
     implicitHeight: 34
     radius: Theme.radiusM
+    activeFocusOnTab: true
     color: mouse.containsMouse ? Theme.overlayHover : Theme.surface
-    border.color: popup.visible ? Theme.primary : Theme.border
+    border.width: 1
+    border.color: (popup.visible || root.activeFocus) ? Theme.primary : Theme.border
     Behavior on color { ColorAnimation { duration: 110 } }
+
+    Accessible.role: Accessible.ComboBox
+    Accessible.name: (root.currentIndex >= 0 && root.currentIndex < root.model.length)
+                     ? String(root.model[root.currentIndex] ?? "") : ""
+    Accessible.onPressAction: popup.visible ? popup.close() : popup.open()
+
+    Keys.onSpacePressed: popup.visible ? popup.close() : popup.open()
+    Keys.onReturnPressed: popup.visible ? popup.close() : popup.open()
+    Keys.onEnterPressed: popup.visible ? popup.close() : popup.open()
+    Keys.onDownPressed: {
+        if (root.currentIndex < root.model.length - 1) {
+            root.currentIndex++
+            root.activated(root.currentIndex)
+        }
+    }
+    Keys.onUpPressed: {
+        if (root.currentIndex > 0) {
+            root.currentIndex--
+            root.activated(root.currentIndex)
+        }
+    }
 
     Text {
         anchors.verticalCenter: parent.verticalCenter

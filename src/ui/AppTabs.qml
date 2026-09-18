@@ -2,6 +2,7 @@ import QtQuick
 
 // 分段标签切换：滑动高亮动画。stretch=true 时标签均分可用宽度（文字超长省略），
 // 用于打印输出页等宽度受限场景；默认按内容自适应，行为不变。
+// 键盘可达：Tab 聚焦（焦点描边）、←/→ 切换标签；对读屏暴露为 PageTabList
 Item {
     id: root
     property var model: []
@@ -11,11 +12,21 @@ Item {
 
     implicitWidth: stretch ? 160 : row.x * 2 + row.implicitWidth
     implicitHeight: 36
+    activeFocusOnTab: true
+
+    Accessible.role: Accessible.PageTabList
+    Accessible.name: (root.currentIndex >= 0 && root.currentIndex < root.model.length)
+                     ? String(root.model[root.currentIndex] ?? "") : ""
+
+    Keys.onLeftPressed: if (root.currentIndex > 0) root.tabClicked(root.currentIndex - 1)
+    Keys.onRightPressed: if (root.currentIndex < root.model.length - 1) root.tabClicked(root.currentIndex + 1)
 
     Rectangle {
         anchors.fill: parent
         radius: Theme.radiusM
         color: Theme.surfaceAlt
+        border.width: root.activeFocus ? 2 : 0
+        border.color: Theme.primary
     }
 
     Rectangle {

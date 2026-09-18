@@ -11,6 +11,22 @@ Item {
     property bool useRandomSeed: true
     property int strategy: 0 // 0 只要可排就排（placeAll） 1 影响质量的课不排
 
+    // 「推荐」徽标（内联组件，供参数行复用）
+    component RecChip: Rectangle {
+        width: recText.implicitWidth + 12
+        height: 18
+        radius: 9
+        color: Qt.rgba(Theme.success.r, Theme.success.g, Theme.success.b, 0.12)
+        Text {
+            id: recText
+            anchors.centerIn: parent
+            text: qsTr("推荐")
+            color: Theme.success
+            font.pixelSize: 10
+            font.bold: true
+        }
+    }
+
     function startRun() {
         app.runScheduler({
             "runs": root.runs,
@@ -61,11 +77,26 @@ Item {
                             anchors.margins: Theme.spacingL
                             spacing: Theme.spacingM
 
-                            Text {
-                                text: qsTr("排课参数")
-                                font.pixelSize: Theme.fontSubtitle
-                                font.bold: true
-                                color: Theme.text
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: qsTr("排课参数")
+                                    font.pixelSize: Theme.fontSubtitle
+                                    font.bold: true
+                                    color: Theme.text
+                                }
+                                Item { Layout.fillWidth: true }
+                                AppButton {
+                                    text: qsTr("↺ 恢复推荐参数")
+                                    variant: "subtle"
+                                    onClicked: {
+                                        root.runs = 8
+                                        iterCombo.currentIndex = 2
+                                        root.maxIterations = 20000
+                                        seedField.text = ""
+                                        root.strategy = 0
+                                    }
+                                }
                             }
 
                             GridLayout {
@@ -74,14 +105,23 @@ Item {
                                 columnSpacing: Theme.spacingL
                                 rowSpacing: Theme.spacingM
 
-                                Text { text: qsTr("运行次数（取最优）"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                                RowLayout {
+                                    spacing: Theme.spacingS
+                                    Text { text: qsTr("运行次数（取最优）"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                                    RecChip {}
+                                }
                                 AppStepper {
                                     from: 1; to: 32; value: root.runs; suffix: qsTr(" 轮")
                                     onValueModified: root.runs = value
                                 }
 
-                                Text { text: qsTr("每轮迭代上限"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                                RowLayout {
+                                    spacing: Theme.spacingS
+                                    Text { text: qsTr("每轮迭代上限"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                                    RecChip {}
+                                }
                                 AppComboBox {
+                                    id: iterCombo
                                     Layout.fillWidth: true
                                     model: ["5000", "10000", "20000", "50000", "100000"]
                                     currentIndex: 2
@@ -95,7 +135,11 @@ Item {
                                     placeholder: qsTr("留空 = 每次随机")
                                 }
 
-                                Text { text: qsTr("排课策略"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                                RowLayout {
+                                    spacing: Theme.spacingS
+                                    Text { text: qsTr("排课策略"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                                    RecChip {}
+                                }
                                 AppComboBox {
                                     Layout.fillWidth: true
                                     model: [qsTr("只要可排就排"), qsTr("影响质量的课不排")]
@@ -103,12 +147,37 @@ Item {
                                     onActivated: root.strategy = index
                                 }
                             }
-                            Text {
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                text: qsTr("「影响质量的课不排」：实在放不下的课节将留作未排，由手工调整。")
-                                color: Theme.textDisabled
-                                font.pixelSize: Theme.fontCaption
-                                wrapMode: Text.WordWrap
+                                spacing: 4
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: qsTr("· 运行次数：完整排几遍、取最好的一遍。轮数多更稳但更慢，8 轮适合大多数学校。")
+                                    color: Theme.textDisabled
+                                    font.pixelSize: Theme.fontCaption
+                                    wrapMode: Text.WordWrap
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: qsTr("· 迭代上限：每轮最多尝试多少次调整。日常 20000 即可，排不进去再调大。")
+                                    color: Theme.textDisabled
+                                    font.pixelSize: Theme.fontCaption
+                                    wrapMode: Text.WordWrap
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: qsTr("· 随机种子：填固定数字可复现同样的结果；留空则每次不同。")
+                                    color: Theme.textDisabled
+                                    font.pixelSize: Theme.fontCaption
+                                    wrapMode: Text.WordWrap
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: qsTr("· 策略：「只要可排就排」尽量把课全部排上（推荐）；「影响质量的课不排」会把放不下的课节留作未排，由手工调整。")
+                                    color: Theme.textDisabled
+                                    font.pixelSize: Theme.fontCaption
+                                    wrapMode: Text.WordWrap
+                                }
                             }
 
                             AppButton {
@@ -186,6 +255,24 @@ Item {
                         font.pixelSize: Theme.fontSubtitle
                         font.bold: true
                         color: Theme.text
+                    }
+
+                    // 一句话结论：把硬违例/未排/软分翻译成行动建议
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontBody
+                        property int unplacedN: (reportMap().totalSessions ?? 0) - (reportMap().placedSessions ?? 0)
+                        property int hard: reportMap().hardViolations ?? 0
+                        property real soft: Number(reportMap().softScore ?? 0)
+                        text: {
+                            if (hard === 0 && unplacedN === 0 && soft <= 0)
+                                return qsTr("🎉 全部课节已排入，且满足所有偏好，可直接应用。")
+                            if (hard === 0 && unplacedN === 0)
+                                return qsTr("👍 全部课节已排入；少数偏好未满足（见下方分项），通常可直接应用。")
+                            return qsTr("⚠️ 有 %1 节未能排入。建议放宽限制条件或检查教室后重排；也可先应用再手工调整。").arg(unplacedN)
+                        }
+                        color: (hard === 0 && unplacedN === 0) ? Theme.success : Theme.warning
                     }
 
                     RowLayout {
