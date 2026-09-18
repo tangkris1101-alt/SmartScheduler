@@ -307,7 +307,7 @@ Item {
 
                     // 软约束分项条形图
                     Text {
-                        text: qsTr("软约束分项")
+                        text: qsTr("软约束分项（悬停查看各项含义与改进方法）")
                         color: Theme.textSecondary
                         font.pixelSize: Theme.fontCaption
                     }
@@ -326,22 +326,41 @@ Item {
                                     "classCourseSpread": qsTr("同课分布"),
                                     "chainAmPmCross": qsTr("连课跨界")
                                 }
+                                const hints = {
+                                    "progressAlign": qsTr("同一进度组内，各班上这门课的节次尽量相邻，方便统考与教研。扣分大说明同组班级进度被拉开。在教学计划的「进度组」列设置。"),
+                                    "evenSpread": qsTr("标记了「平均分布」的课程，各班上它的节次尽量错开、不挤在同一时间。在「课程设置」勾选平均分布。"),
+                                    "amPmPolicy": qsTr("课程尽量排在它偏好的上午/下午时段。在「课程设置」的上下午偏好中指定。"),
+                                    "majorMorning": qsTr("主课尽量排在上午。在「课程设置」勾选主课。"),
+                                    "teacherDaily": qsTr("老师每天课节不超过其上限，且各天尽量均衡。在「课程设置」老师的日最多课中指定上限。"),
+                                    "classCourseSpread": qsTr("同班同一门课的多次课不挤在同一天（连课只计一次）。可通过增加连课减少同天重复。"),
+                                    "chainAmPmCross": qsTr("连课（双节课）尽量不跨越上午/下午分界。扣分大说明连课被排到了午休前后的交界节。")
+                                }
                                 let arr = []
                                 let maxV = 1
                                 for (const k of Object.keys(bd)) maxV = Math.max(maxV, bd[k])
                                 for (const k of Object.keys(names))
-                                    arr.push({ key: k, label: names[k], value: bd[k] ?? 0, max: maxV })
+                                    arr.push({ key: k, label: names[k], hint: hints[k],
+                                               value: bd[k] ?? 0, max: maxV })
                                 return arr
                             }
                             delegate: RowLayout {
                                 required property var modelData
                                 Layout.fillWidth: true
                                 spacing: Theme.spacingS
+                                ToolTip.visible: bdHintHover.containsMouse
+                                ToolTip.text: modelData.hint
+                                ToolTip.delay: 250
+                                MouseArea {
+                                    id: bdHintHover
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                }
                                 Text {
                                     Layout.preferredWidth: 90
                                     text: modelData.label
                                     color: Theme.textSecondary
                                     font.pixelSize: Theme.fontCaption
+                                    font.underline: bdHintHover.containsMouse
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true

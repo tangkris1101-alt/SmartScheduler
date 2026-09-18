@@ -193,6 +193,7 @@ Item {
                     }
 
                     ListView {
+                        id: pickList
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         visible: root.scopeIndex < 3
@@ -200,13 +201,40 @@ Item {
                         boundsBehavior: Flickable.StopAtBounds
                         model: root.currentListModel()
                         spacing: 2
+                        activeFocusOnTab: true
+                        keyNavigationEnabled: false
+
+                        // 键盘导航：↑/↓ 移动，Space/Enter 切换当前行勾选
+                        function toggleCurrent() {
+                            if (currentIndex < 0 || currentIndex >= count) return
+                            const m = root.checkedIds
+                            const id = root.currentListModel().get(currentIndex, "id")
+                            if (m[id] === true) delete m[id]; else m[id] = true
+                            root.checkedIds = m
+                        }
+                        Keys.onUpPressed: {
+                            if (currentIndex > 0) currentIndex--
+                            positionViewAtIndex(currentIndex, ListView.Contain)
+                        }
+                        Keys.onDownPressed: {
+                            if (currentIndex < count - 1) currentIndex++
+                            positionViewAtIndex(currentIndex, ListView.Contain)
+                        }
+                        Keys.onSpacePressed: toggleCurrent()
+                        Keys.onReturnPressed: toggleCurrent()
+
+                        Accessible.role: Accessible.List
+                        Accessible.name: qsTr("选择输出对象")
+
                         delegate: Rectangle {
                             id: pickRow
                             required property int index
                             width: ListView.view.width
                             height: 36
                             radius: Theme.radiusS
-                            color: pickHover.containsMouse ? Theme.overlayHover : "transparent"
+                            color: (pickList.activeFocus && pickList.currentIndex === pickRow.index)
+                                   ? Theme.selectedBg
+                                   : (pickHover.containsMouse ? Theme.overlayHover : "transparent")
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.leftMargin: Theme.spacingM
@@ -218,6 +246,7 @@ Item {
                                     font.pixelSize: Theme.fontBody
                                 }
                                 AppSwitch {
+                                    accessibleText: root.currentListModel().get(pickRow.index, "name")
                                     checked: root.checkedIds[root.currentListModel().get(pickRow.index, "id")] === true
                                     onToggled: {
                                         const m = root.checkedIds
@@ -232,9 +261,23 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 propagateComposedEvents: true
-                                onClicked: function (m) { m.accepted = false }
+                                onClicked: function (m) {
+                                    pickList.currentIndex = pickRow.index
+                                    m.accepted = false
+                                }
                             }
                         }
+                    }
+
+                    // 键盘焦点环（叠在列表视口上，不随内容滚动）
+                    Rectangle {
+                        anchors.fill: pickList
+                        anchors.margins: -3
+                        radius: Theme.radiusS
+                        visible: root.scopeIndex < 3
+                        color: "transparent"
+                        border.width: pickList.activeFocus ? 2 : 0
+                        border.color: Theme.primary
                     }
                     AppEmptyState {
                         Layout.fillWidth: true

@@ -5,6 +5,7 @@ import QtQuick.Layouts
 // 名单管理页：班级/课程/老师/教室 标签切换 + 自绘表格（行内编辑、斑马纹、悬停）
 Item {
     id: root
+    objectName: "rosterPage"
 
     property int currentTab: 0
     property int selectedRow: -1
@@ -119,11 +120,30 @@ Item {
                 // 数据行
                 ListView {
                     id: table
+                    objectName: "rosterTable"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     model: root.currentModel
+                    activeFocusOnTab: true
+                    keyNavigationEnabled: false
+
+                    // 键盘导航：↑/↓ 移动并选中；Enter/Space 保持选中当前行
+                    function keySelect(d) {
+                        if (count === 0) return
+                        const base = currentIndex < 0 ? Math.max(0, root.selectedRow) : currentIndex
+                        currentIndex = Math.max(0, Math.min(count - 1, base + d))
+                        root.selectedRow = currentIndex
+                        positionViewAtIndex(currentIndex, ListView.Contain)
+                    }
+                    Keys.onUpPressed: keySelect(-1)
+                    Keys.onDownPressed: keySelect(1)
+                    Keys.onReturnPressed: if (currentIndex >= 0) root.selectedRow = currentIndex
+                    Keys.onSpacePressed: if (currentIndex >= 0) root.selectedRow = currentIndex
+
+                    Accessible.role: Accessible.Table
+                    Accessible.name: root.tabNames[root.currentTab]
 
                     delegate: Rectangle {
                         id: rowItem
@@ -162,6 +182,7 @@ Item {
                             propagateComposedEvents: true
                             onClicked: function (mouse) {
                                 root.selectedRow = rowItem.index
+                                table.currentIndex = rowItem.index
                                 mouse.accepted = false
                             }
                         }
@@ -177,6 +198,16 @@ Item {
                               ? qsTr("点击右上角「添加」新建一行，或点击「Excel 导入」批量导入")
                               : ""
                     }
+                }
+
+                // 键盘焦点环（叠在列表视口上，不随内容滚动）
+                Rectangle {
+                    anchors.fill: table
+                    anchors.margins: -3
+                    radius: Theme.radiusS
+                    color: "transparent"
+                    border.width: table.activeFocus ? 2 : 0
+                    border.color: Theme.primary
                 }
             }
         }

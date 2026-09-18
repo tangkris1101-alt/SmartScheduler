@@ -486,5 +486,62 @@ int main(int argc, char *argv[])
         });
     }
 
+    // 回归自检：--smoke=list-keys 名单表键盘导航 —— 列表应可聚焦，↓ 键应移动并选中下一行
+    // 0 通过，17=列表/页面未找到或聚焦失败，18=↓ 键未生效
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("list-keys")) {
+        auto findAll = [](QQuickItem *root, const QString &name, QList<QQuickItem *> &out,
+                          auto &&self) -> void {
+            if (!root)
+                return;
+            if (root->objectName() == name)
+                out.append(root);
+            const auto items = root->childItems();
+            for (auto *c : items)
+                self(c, name, out, self);
+        };
+        QTimer::singleShot(
+            1200, &app, [&appController, &app, findAll]() mutable {
+                appController.createSampleSchool(false); // 6 班
+                QQuickWindow *w = nullptr;
+                const auto windows = QGuiApplication::allWindows();
+                for (auto *win : windows) {
+                    auto *qw = qobject_cast<QQuickWindow *>(win);
+                    if (qw && qw->property("currentPage").isValid())
+                        w = qw;
+                }
+                if (!w) {
+                    app.exit(17);
+                    return;
+                }
+                w->setProperty("currentPage", 1); // 名单管理
+                QTimer::singleShot(700, &app, [&app, w, findAll]() mutable {
+                    QList<QQuickItem *> tables;
+                    findAll(w->contentItem(), QStringLiteral("rosterTable"), tables, findAll);
+                    if (tables.isEmpty()) {
+                        qWarning("smoke-list-keys: 未找到 rosterTable");
+                        app.exit(17);
+                        return;
+                    }
+                    auto *t = tables.first();
+                    QMetaObject::invokeMethod(t, "forceActiveFocus");
+                    if (!t->hasActiveFocus()) {
+                        qWarning("smoke-list-keys: 列表聚焦失败");
+                        app.exit(17);
+                        return;
+                    }
+                    QTest::keyClick(w, Qt::Key_Down);
+                    QTimer::singleShot(300, &app, [&app, w, t, findAll]() mutable {
+                        QList<QQuickItem *> pages;
+                        findAll(w->contentItem(), QStringLiteral("rosterPage"), pages, findAll);
+                        const int cur = t->property("currentIndex").toInt();
+                        const int sel =
+                            pages.isEmpty() ? -1 : pages.first()->property("selectedRow").toInt();
+                        qWarning("smoke-list-keys: ↓ 后 currentIndex=%d selectedRow=%d", cur, sel);
+                        app.exit(cur == 1 && sel == 1 ? 0 : 18);
+                    });
+                });
+            });
+    }
+
     return app.exec();
 }

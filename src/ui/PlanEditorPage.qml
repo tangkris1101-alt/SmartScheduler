@@ -165,6 +165,21 @@ Item {
                             boundsBehavior: Flickable.StopAtBounds
                             model: classModel
                             spacing: 2
+                            activeFocusOnTab: true
+                            keyNavigationEnabled: false
+
+                            // 键盘导航：↑/↓ 移动并选中班级
+                            function keySelect(d) {
+                                if (count === 0) return
+                                currentIndex = Math.max(0, Math.min(count - 1, currentIndex + d))
+                                planModel.currentClassId = classModel.get(currentIndex, "id")
+                                positionViewAtIndex(currentIndex, ListView.Contain)
+                            }
+                            Keys.onUpPressed: keySelect(-1)
+                            Keys.onDownPressed: keySelect(1)
+
+                            Accessible.role: Accessible.List
+                            Accessible.name: qsTr("班级列表")
                             delegate: Rectangle {
                                 id: clsRow
                                 required property int index
@@ -190,7 +205,10 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: planModel.currentClassId = classModel.get(clsRow.index, "id")
+                                    onClicked: {
+                                        planModel.currentClassId = classModel.get(clsRow.index, "id")
+                                        classList.currentIndex = clsRow.index
+                                    }
                                 }
                             }
                             AppEmptyState {
@@ -200,6 +218,16 @@ Item {
                                 title: qsTr("还没有班级")
                                 hint: qsTr("请先在「名单管理」页添加")
                             }
+                        }
+
+                        // 键盘焦点环（叠在列表视口上，不随内容滚动）
+                        Rectangle {
+                            anchors.fill: classList
+                            anchors.margins: -3
+                            radius: Theme.radiusS
+                            color: "transparent"
+                            border.width: classList.activeFocus ? 2 : 0
+                            border.color: Theme.primary
                         }
                     }
                 }
@@ -583,6 +611,21 @@ Item {
                             boundsBehavior: Flickable.StopAtBounds
                             model: teacherModel
                             spacing: 2
+                            activeFocusOnTab: true
+                            keyNavigationEnabled: false
+
+                            // 键盘导航：↑/↓ 移动并选中老师
+                            function keySelect(d) {
+                                if (count === 0) return
+                                currentIndex = Math.max(0, Math.min(count - 1, currentIndex + d))
+                                dutyModel.currentTeacherId = teacherModel.get(currentIndex, "id")
+                                positionViewAtIndex(currentIndex, ListView.Contain)
+                            }
+                            Keys.onUpPressed: keySelect(-1)
+                            Keys.onDownPressed: keySelect(1)
+
+                            Accessible.role: Accessible.List
+                            Accessible.name: qsTr("老师列表")
                             delegate: Rectangle {
                                 id: tRow
                                 required property int index
@@ -605,7 +648,10 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: dutyModel.currentTeacherId = teacherModel.get(tRow.index, "id")
+                                    onClicked: {
+                                        dutyModel.currentTeacherId = teacherModel.get(tRow.index, "id")
+                                        teacherList.currentIndex = tRow.index
+                                    }
                                 }
                             }
                             AppEmptyState {
@@ -614,6 +660,16 @@ Item {
                                 icon: "👩‍🏫"
                                 title: qsTr("还没有老师")
                             }
+                        }
+
+                        // 键盘焦点环（叠在列表视口上，不随内容滚动）
+                        Rectangle {
+                            anchors.fill: teacherList
+                            anchors.margins: -3
+                            radius: Theme.radiusS
+                            color: "transparent"
+                            border.width: teacherList.activeFocus ? 2 : 0
+                            border.color: Theme.primary
                         }
                     }
                 }

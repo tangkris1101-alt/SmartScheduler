@@ -75,6 +75,24 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     model: groupModel
                     spacing: 2
+                    activeFocusOnTab: true
+                    keyNavigationEnabled: false
+
+                    // 键盘导航：↑/↓ 移动并选中
+                    function keySelect(d) {
+                        if (count === 0) return
+                        const base = currentIndex < 0 ? Math.max(0, root.selectedRow) : currentIndex
+                        currentIndex = Math.max(0, Math.min(count - 1, base + d))
+                        root.selectedRow = currentIndex
+                        positionViewAtIndex(currentIndex, ListView.Contain)
+                    }
+                    Keys.onUpPressed: keySelect(-1)
+                    Keys.onDownPressed: keySelect(1)
+                    Keys.onReturnPressed: if (currentIndex >= 0) root.selectedRow = currentIndex
+                    Keys.onSpacePressed: if (currentIndex >= 0) root.selectedRow = currentIndex
+
+                    Accessible.role: Accessible.List
+                    Accessible.name: qsTr("归类名单")
 
                     delegate: Rectangle {
                         id: gRow
@@ -118,7 +136,10 @@ Item {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.selectedRow = gRow.index
+                            onClicked: {
+                                root.selectedRow = gRow.index
+                                groupList.currentIndex = gRow.index
+                            }
                         }
                     }
 
@@ -129,6 +150,16 @@ Item {
                         title: qsTr("还没有归类名单")
                         hint: qsTr("选择类型后点击「添加」，例如：高一年级、语文教研组")
                     }
+                }
+
+                // 键盘焦点环（叠在列表视口上，不随内容滚动）
+                Rectangle {
+                    anchors.fill: groupList
+                    anchors.margins: -3
+                    radius: Theme.radiusS
+                    color: "transparent"
+                    border.width: groupList.activeFocus ? 2 : 0
+                    border.color: Theme.primary
                 }
 
                 AppButton {

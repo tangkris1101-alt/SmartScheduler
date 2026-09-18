@@ -60,6 +60,54 @@ Popup {
             color: Theme.textSecondary; font.pixelSize: Theme.fontCaption; wrapMode: Text.WordWrap
         }
 
+        // 字段对照说明（可展开）
+        ColumnLayout {
+            id: fieldHelp
+            Layout.leftMargin: Theme.spacingXL; Layout.rightMargin: Theme.spacingXL
+            Layout.fillWidth: true
+            spacing: 4
+            property bool expanded: false
+
+            RowLayout {
+                spacing: 4
+                Text {
+                    text: fieldHelp.expanded ? "▾" : "▸"
+                    color: Theme.primary; font.pixelSize: Theme.fontCaption
+                }
+                Text {
+                    text: qsTr("字段对照说明（* 为必填，留空取默认）")
+                    color: Theme.primary; font.pixelSize: Theme.fontCaption
+                }
+                Item { Layout.fillWidth: true }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: fieldHelp.expanded = !fieldHelp.expanded
+                }
+            }
+            Flickable {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(helpText.implicitHeight, 170)
+                visible: fieldHelp.expanded
+                contentHeight: helpText.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                Text {
+                    id: helpText
+                    width: fieldHelp.width
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: Theme.fontCaption
+                    color: Theme.textSecondary
+                    lineHeight: 1.35
+                    text: qsTr("【班级】名称*、全称、简称、拼音码、优先次序、年级、备注\n"
+                             + "【课程】名称*、拼音码、教研组、主课(是/否)、理科(是/否)、平均分布(是/否)、进度一致班级数、上下午(自动/优先上午/优先下午)、备注\n"
+                             + "【老师】姓名*、拼音码、教研组、日最多课(空=不限)、互斥组(同组同时只上一人)、备注\n"
+                             + "【教室】名称*、容量(同时容纳班级数)、拼音码、备注\n"
+                             + "【教学计划】班级*、课程*、任课老师(顿号分隔)、周节数*、连课次数、连课节数、上午节数(空=自动)、合班(是/否)、教室、开课周、结束周(空=学期末)、进度组")
+                }
+            }
+        }
+
         RowLayout {
             Layout.leftMargin: Theme.spacingXL; Layout.rightMargin: Theme.spacingXL
             spacing: Theme.spacingS
