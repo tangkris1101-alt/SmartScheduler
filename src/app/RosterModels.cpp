@@ -2,6 +2,65 @@
 
 #include "AppController.h"
 
+#include <QRegularExpression>
+
+namespace {
+
+// 生成不与现有名单冲突的默认名。
+// numericSeries（班级）：现有名字统一为「前缀+数字+班」时顺延同前缀下一个号
+// （1班/2班 → 3班；高一1班/高一2班 → 高一3班）；空名单从「1班」起；
+// 前缀不一致或无数字命名习惯时，回退为 base、base2……去重。
+QString nextEntityName(const QString &base, const QStringList &existing, bool numericSeries)
+{
+    if (numericSeries) {
+        static const QRegularExpression re(QStringLiteral("^(.*?)(\\d+)班$"));
+        QString prefix;
+        bool prefixSet = false, mixed = false;
+        int maxNum = 0;
+        for (const QString &n : existing) {
+            const QRegularExpressionMatch m = re.match(n);
+            if (!m.hasMatch())
+                continue; // 不规则命名不参与顺延
+            if (!prefixSet) {
+                prefix = m.captured(1);
+                prefixSet = true;
+            } else if (m.captured(1) != prefix) {
+                mixed = true; // 前缀不一致（如高一1班/高二1班并存），无法判断顺延谁
+                break;
+            }
+            maxNum = std::max(maxNum, m.captured(2).toInt());
+        }
+        if (prefixSet && !mixed) {
+            QString cand;
+            do {
+                cand = prefix + QString::number(++maxNum) + QStringLiteral("班");
+            } while (existing.contains(cand));
+            return cand;
+        }
+        if (existing.isEmpty())
+            return QStringLiteral("1班");
+    }
+    if (!existing.contains(base))
+        return base;
+    for (int i = 2;; ++i) {
+        const QString cand = base + QString::number(i);
+        if (!existing.contains(cand))
+            return cand;
+    }
+}
+
+template <typename List>
+QStringList entityNames(const List &entities)
+{
+    QStringList names;
+    names.reserve(entities.size());
+    for (const auto &e : entities)
+        names.append(e.name);
+    return names;
+}
+
+} // namespace
+
 // ==================== NamedEntityModel ====================
 
 NamedEntityModel::NamedEntityModel(AppController *app, QObject *parent)
@@ -201,7 +260,7 @@ sched::NamedEntity *ClassListModel::entityAt(int sourceRow) const
 sched::NamedEntity *ClassListModel::createEntity()
 {
     sched::ClassInfo c;
-    c.name = QStringLiteral("新班级");
+    c.name = nextEntityName(QStringLiteral("新班级"), entityNames(school()->classes), true);
     const qint64 id = school()->addClass(c);
     return school()->findClass(id);
 }
@@ -251,7 +310,7 @@ sched::NamedEntity *CourseListModel::entityAt(int sourceRow) const
 sched::NamedEntity *CourseListModel::createEntity()
 {
     sched::Course c;
-    c.name = QStringLiteral("新课程");
+    c.name = nextEntityName(QStringLiteral("新课程"), entityNames(school()->courses), false);
     const qint64 id = school()->addCourse(c);
     return school()->findCourse(id);
 }
@@ -315,7 +374,7 @@ sched::NamedEntity *TeacherListModel::entityAt(int sourceRow) const
 sched::NamedEntity *TeacherListModel::createEntity()
 {
     sched::Teacher t;
-    t.name = QStringLiteral("新老师");
+    t.name = nextEntityName(QStringLiteral("新老师"), entityNames(school()->teachers), false);
     const qint64 id = school()->addTeacher(t);
     return school()->findTeacher(id);
 }
@@ -366,7 +425,7 @@ sched::NamedEntity *ClassroomListModel::entityAt(int sourceRow) const
 sched::NamedEntity *ClassroomListModel::createEntity()
 {
     sched::Classroom c;
-    c.name = QStringLiteral("新教室");
+    c.name = nextEntityName(QStringLiteral("新教室"), entityNames(school()->classrooms), false);
     const qint64 id = school()->addClassroom(c);
     return school()->findClassroom(id);
 }

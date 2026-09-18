@@ -9,6 +9,9 @@ Item {
     property int selectedRow: -1
     property string memberFilter: ""
     property var candidateList: []
+    // 成员版本号：成员勾选后递增，强制开关的 checked 绑定重算
+    //（isMember() 是函数调用，模型内部变化不会触发绑定重算，代理也不会随 candidateList 重建）
+    property int memberVersion: 0
 
     readonly property var typeOptions: [qsTr("年级"), qsTr("老师教研组"), qsTr("课程教研组")]
 
@@ -21,6 +24,17 @@ Item {
         // 同步名称编辑框（直接赋值，不用绑定，避免输入中被重置）
         nameField.text = root.selectedRow >= 0 && root.selectedRow < groupModel.count
                          ? String(groupModel.get(root.selectedRow, "name") ?? "") : ""
+    }
+    // 提交名称编辑：回车 / 失焦 / 切换名单前均走这里（仅在真正变化时写模型，避免误标未保存）
+    function commitName() {
+        if (root.selectedRow < 0 || root.selectedRow >= groupModel.count)
+            return
+        const name = nameField.text.trim()
+        const cur = String(groupModel.get(root.selectedRow, "name") ?? "")
+        if (name.length > 0 && name !== cur)
+            groupModel.set(root.selectedRow, "name", name)
+        else if (name !== cur)
+            nameField.text = cur // 空名等无效输入：还原为模型当前值
     }
     onSelectedRowChanged: refreshCandidates()
 
@@ -137,6 +151,8 @@ Item {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
+                                if (gRow.index !== root.selectedRow)
+                                    root.commitName() // 切换前提交未确认的名称编辑
                                 root.selectedRow = gRow.index
                                 groupList.currentIndex = gRow.index
                             }
@@ -200,14 +216,10 @@ Item {
                     AppTextField {
                         id: nameField
                         Layout.fillWidth: true
-                        placeholder: qsTr("输入名称后回车确认")
+                        placeholder: qsTr("输入名称，回车或点击别处确认")
                         showClear: false
-                        onAccepted: {
-                            const name = text.trim()
-                            if (name.length > 0 && root.selectedRow >= 0)
-                                groupModel.set(root.selectedRow, "name", name)
-                            refreshCandidates() // 还原显示为模型当前值
-                        }
+                        commitOnFocusLoss: true
+                        onAccepted: root.commitName()
                     }
                 }
                 Text {
@@ -259,9 +271,15 @@ Item {
                             }
                             AppSwitch {
                                 objectName: "memberSwitch"
-                                checked: groupModel.isMember(root.selectedGroupId(), mRow.modelData.id)
+                                checked: {
+                                    void root.memberVersion // 成员变动后强制重算
+                                    return groupModel.isMember(root.selectedGroupId(),
+                                                               mRow.modelData.id)
+                                }
                                 onToggled: {
-                                    groupModel.toggleMember(root.selectedGroupId(), mRow.modelData.id)
+                                    groupModel.toggleMember(root.selectedGroupId(),
+                                                            mRow.modelData.id)
+                                    ++root.memberVersion // 驱动 checked 绑定重算，开关视觉即时跟随
                                     root.refreshCandidates()
                                 }
                             }

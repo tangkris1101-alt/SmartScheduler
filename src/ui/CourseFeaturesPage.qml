@@ -14,6 +14,18 @@ Item {
     onVisibleChanged: if (visible) refreshForm()
     onSelectedRowChanged: refreshForm()
 
+    // 提交名称编辑：回车 / 失焦 / 切换条目或标签前调用（仅变化时写模型）
+    function commitName() {
+        if (root.selectedRow < 0 || root.selectedRow >= root.currentModel.count)
+            return
+        const name = nameField.text.trim()
+        const cur = String(root.currentModel.get(root.selectedRow, "name") ?? "")
+        if (name.length > 0 && name !== cur)
+            root.currentModel.set(root.selectedRow, "name", name)
+        else if (name !== cur)
+            nameField.text = cur // 空名等无效输入：还原为模型当前值
+    }
+
     function refreshForm() {
         if (root.currentTab === 0 && root.selectedRow >= 0 && root.selectedRow < courseModel.count) {
             nameField.text = courseModel.get(root.selectedRow, "name")
@@ -59,6 +71,7 @@ Item {
                     model: root.tabNames
                     currentIndex: root.currentTab
                     onTabClicked: function (index) {
+                        root.commitName() // 切换标签前提交未确认的名称编辑
                         root.currentTab = index
                         root.selectedRow = -1
                         featureSearch.text = ""
@@ -66,11 +79,26 @@ Item {
                         teacherModel.filter = ""
                     }
                 }
-                AppTextField {
-                    id: featureSearch
+                RowLayout {
                     Layout.fillWidth: true
-                    placeholder: qsTr("搜索…")
-                    onTextChanged: root.currentModel.filter = text
+                    spacing: Theme.spacingS
+                    AppTextField {
+                        id: featureSearch
+                        Layout.fillWidth: true
+                        placeholder: qsTr("搜索…")
+                        onTextChanged: root.currentModel.filter = text
+                    }
+                    AppButton {
+                        text: qsTr("✚ 添加")
+                        variant: "primary"
+                        enabled: app.hasProject
+                        onClicked: {
+                            featureSearch.text = ""
+                            root.currentModel.filter = ""
+                            root.currentModel.appendRow()
+                            root.selectedRow = root.currentModel.count - 1
+                        }
+                    }
                 }
 
                 ListView {
@@ -135,6 +163,8 @@ Item {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
+                                if (eRow.index !== root.selectedRow)
+                                    root.commitName() // 切换前提交未确认的名称编辑
                                 root.selectedRow = eRow.index
                                 entityList.currentIndex = eRow.index
                             }
@@ -146,7 +176,7 @@ Item {
                         visible: root.currentModel.count === 0
                         icon: "📭"
                         title: root.currentTab === 0 ? qsTr("还没有课程") : qsTr("还没有老师")
-                        hint: qsTr("请先在「名单管理」页添加")
+                        hint: qsTr("点击上方「添加」新建，或在「名单管理」页批量导入")
                     }
                 }
 
@@ -193,7 +223,8 @@ Item {
                         id: nameField
                         Layout.fillWidth: true
                         showClear: false
-                        onAccepted: root.currentModel.set(root.selectedRow, "name", text)
+                        commitOnFocusLoss: true
+                        onAccepted: root.commitName()
                     }
                 }
 
@@ -313,7 +344,7 @@ Item {
                 visible: root.selectedRow < 0 || root.selectedRow >= root.currentModel.count
                 icon: "⚙️"
                 title: qsTr("选择要编辑的%1").arg(root.currentTab === 0 ? qsTr("课程") : qsTr("老师"))
-                hint: qsTr("从左侧列表选择；新增请前往「名单管理」页")
+                hint: qsTr("从左侧列表选择，或点击「添加」新建")
             }
         }
     }

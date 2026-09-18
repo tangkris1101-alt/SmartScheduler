@@ -216,7 +216,8 @@ int main(int argc, char *argv[])
     }
 
     // 回归自检：--smoke=groups 走「归类分组页选名单 → 真实点击成员开关 → 点击类型下拉选第二项」
-    // 的完整鼠标路径；0 通过，7=建组失败，8=页面/候选异常，9=成员勾选无效，10=下拉自更新无效
+    // 的完整鼠标路径；0 通过，7=建组失败，8=页面/候选异常，9=成员勾选无效，10=下拉自更新无效，
+    // 14=开关视觉状态与模型不一致（AppSwitch 是受控组件，checked 必须由外部驱动）
     if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("groups")) {
         // Repeater/Loader 创建的项只在可视化 Item 树里，QObject::children() 找不到 → childItems 递归
         auto findAllItems = [](QQuickItem *root, const QString &name, QList<QQuickItem *> &out,
@@ -310,6 +311,24 @@ int main(int argc, char *argv[])
                                 return;
                             }
                             qWarning("smoke-groups: 成员勾选 OK");
+                            // 视觉断言：开关 checked 必须与模型成员状态一致
+                            // （refreshCandidates 会重建代理，旧指针可能悬空，必须重新查找）
+                            const bool nowMember = groupModel.isMember(selGid, firstId);
+                            QList<QQuickItem *> switches2;
+                            findAllItems(page, QStringLiteral("memberSwitch"), switches2,
+                                         findAllItems);
+                            const int visChecked = switches2.isEmpty()
+                                                       ? -1
+                                                       : int(switches2.first()
+                                                                 ->property("checked")
+                                                                 .toBool());
+                            qWarning("smoke-groups: 开关视觉 checked=%d 模型=%d", visChecked,
+                                     int(nowMember));
+                            if (visChecked != int(nowMember)) {
+                                qWarning("smoke-groups: 开关视觉状态与模型不一致");
+                                app.exit(14);
+                                return;
+                            }
                             // 第二步：验证下拉弹窗点击后 currentIndex 自更新
                             QList<QQuickItem *> combos;
                             findAllItems(page, QStringLiteral("typeCombo"), combos, findAllItems);

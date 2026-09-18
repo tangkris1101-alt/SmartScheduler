@@ -6,6 +6,8 @@ Rectangle {
     property alias text: input.text
     property string placeholder: ""
     property bool showClear: true
+    // 失焦时也发出 accepted（用于「点击空白处确认修改」的命名字段）
+    property bool commitOnFocusLoss: false
     signal accepted()
     function forceFocus() { input.forceActiveFocus() }
 
@@ -32,6 +34,10 @@ Rectangle {
         clip: true
         activeFocusOnTab: true
         onAccepted: root.accepted()
+        onActiveFocusChanged: {
+            if (!activeFocus && root.commitOnFocusLoss)
+                root.accepted()
+        }
 
         Text {
             anchors.verticalCenter: parent.verticalCenter

@@ -29,6 +29,7 @@ private Q_SLOTS:
     }
     void projectLifecycle();
     void classModelEditFilterCascade();
+    void defaultEntityNames();
     void courseTeacherClassroomRoles();
     void groupModelMembers();
     void planListModelOps();
@@ -146,6 +147,39 @@ void TestApp::classModelEditFilterCascade()
     QCOMPARE(school->planEntries.size(), 0);
     QCOMPARE(school->noScheduleConstraints.size(), 0);
     QVERIFY(!model.removeRow(99)); // 越界失败
+}
+
+void TestApp::defaultEntityNames()
+{
+    AppController app;
+    app.newProject(QStringLiteral("命名校"), 5, 7, 4, 20);
+
+    ClassListModel classes(&app);
+    classes.appendRow();
+    QCOMPARE(classes.get(0, QStringLiteral("name")).toString(), QStringLiteral("1班"));
+    classes.appendRow();
+    QCOMPARE(classes.get(1, QStringLiteral("name")).toString(), QStringLiteral("2班"));
+    // 不规则命名不打断顺延；空出的序号优先回填
+    classes.set(1, QStringLiteral("name"), QStringLiteral("实验班"));
+    classes.appendRow();
+    QCOMPARE(classes.get(2, QStringLiteral("name")).toString(), QStringLiteral("2班"));
+    // 统一前缀顺延：高一1班 / 高一3班 → 高一4班
+    classes.set(0, QStringLiteral("name"), QStringLiteral("高一1班"));
+    classes.set(2, QStringLiteral("name"), QStringLiteral("高一3班"));
+    classes.appendRow();
+    QCOMPARE(classes.get(3, QStringLiteral("name")).toString(), QStringLiteral("高一4班"));
+    // 前缀混合（高一/高二并存）→ 回退 base 去重
+    classes.set(3, QStringLiteral("name"), QStringLiteral("高二1班"));
+    classes.appendRow();
+    QCOMPARE(classes.get(4, QStringLiteral("name")).toString(), QStringLiteral("新班级"));
+    classes.appendRow();
+    QCOMPARE(classes.get(5, QStringLiteral("name")).toString(), QStringLiteral("新班级2"));
+
+    TeacherListModel teachers(&app);
+    teachers.appendRow();
+    teachers.appendRow();
+    QCOMPARE(teachers.get(0, QStringLiteral("name")).toString(), QStringLiteral("新老师"));
+    QCOMPARE(teachers.get(1, QStringLiteral("name")).toString(), QStringLiteral("新老师2"));
 }
 
 void TestApp::courseTeacherClassroomRoles()

@@ -118,7 +118,15 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+Y"; onActivated: adjust.redo() }
     Shortcut { sequence: "Ctrl+Shift+Z"; onActivated: adjust.redo() }
 
+    // 点击窗口空白处让输入框失焦（配合 AppTextField.commitOnFocusLoss 触发「点击别处确认」）；
+    // 置于最底层，只接收未被按钮/列表等交互控件消费的点击
+    MouseArea {
+        anchors.fill: parent
+        onClicked: shell.forceActiveFocus()
+    }
+
     ColumnLayout {
+        id: shell
         anchors.fill: parent
         spacing: 0
 
