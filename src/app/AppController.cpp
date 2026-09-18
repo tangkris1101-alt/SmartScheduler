@@ -895,7 +895,7 @@ void AppController::createSampleSchool(bool autoSchedule)
         s.findGroup(gradeId)->memberIds.append(classIds.last());
     }
 
-    // 课程（11 门，含主课/理科/平均分布/上下午）
+    // 课程（12 门，含主课/理科/平均分布/上下午；自习作为独立课程排满课表）
     auto addCourse = [&](const QString &name, bool major, bool science,
                          sched::AmPmPolicy ampm = sched::AmPmPolicy::Auto, bool spread = false) {
         sched::Course c;
@@ -918,6 +918,7 @@ void AppController::createSampleSchool(bool autoSchedule)
     const qint64 tiyu = addCourse(QStringLiteral("体育"), false, false, sched::AmPmPolicy::Afternoon);
     const qint64 xinxi = addCourse(QStringLiteral("信息"), false, true, sched::AmPmPolicy::Auto, true);
     const qint64 shengya = addCourse(QStringLiteral("生涯规划"), false, false);
+    const qint64 zixi = addCourse(QStringLiteral("自习"), false, false, sched::AmPmPolicy::Afternoon);
 
     // 老师（14 位）
     auto addTeacher = [&](const QString &name, int maxPerDay = -1) {
@@ -993,6 +994,7 @@ void AppController::createSampleSchool(bool autoSchedule)
         plan(cls, tiyu, {tHeBing}, 2, 0, 2, playground, true); // 体育合班
         plan(cls, xinxi, {tZhengTao}, 2, 0, 2, computerRoom);
         plan(cls, shengya, {tZhengTao}, 0.5); // 单双周
+        plan(cls, zixi, {ywTeachers[i]}, 2.5); // 自习排满剩余容量（32.5+2.5=35），由语文任课老师看班
     }
 
     // 合班组：体育两两合班

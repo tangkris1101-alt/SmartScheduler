@@ -940,6 +940,15 @@ void TestApp::sampleSchool()
     // 预排未被移动
     QCOMPARE(s->schedule.courseAt(s->classes.first().id, 4 * 7, 0).value_or(-1),
              s->courses[9].id); // 体育
+    // 自习补齐容量：每班每格单双周均有课，不留空
+    for (const auto &c : s->classes) {
+        for (int slot = 0; slot < 5 * 7; ++slot) {
+            QVERIFY2(s->schedule.courseAt(c.id, slot, 1).has_value(),
+                     qPrintable(QStringLiteral("%1 slot%2 单周为空").arg(c.name).arg(slot)));
+            QVERIFY2(s->schedule.courseAt(c.id, slot, 2).has_value(),
+                     qPrintable(QStringLiteral("%1 slot%2 双周为空").arg(c.name).arg(slot)));
+        }
+    }
 }
 
 void TestApp::projectTemplates()
