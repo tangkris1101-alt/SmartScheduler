@@ -206,6 +206,7 @@ Item {
 
                 // 右：计划条目表
                 AppCard {
+                    objectName: "planTableCard"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     ColumnLayout {
@@ -537,14 +538,15 @@ Item {
                             }
                         }
 
-                        AppEmptyState {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            visible: planModel.count === 0
-                            icon: "📅"
-                            title: qsTr("该班还没有教学计划")
-                            hint: qsTr("点击「添加课程行」开始，或使用「复制到班级」从其他班复制")
-                        }
+                    }
+
+                    AppEmptyState {
+                        objectName: "planEmptyState"
+                        anchors.centerIn: parent
+                        visible: planModel.currentClassId >= 0 && planModel.count === 0
+                        icon: "📅"
+                        title: qsTr("该班还没有教学计划")
+                        hint: qsTr("点击「添加课程行」开始，或使用「复制到班级」从其他班复制")
                     }
 
                     AppEmptyState {

@@ -369,5 +369,69 @@ int main(int argc, char *argv[])
         });
     }
 
+    // 回归自检：--smoke=plan-empty 空教学计划状态下，空状态提示应居中于卡片
+    // 0 通过，11=页面/组件未找到，12=空状态未居中，13=截图保存失败
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("plan-empty")) {
+        auto findAll = [](QQuickItem *root, const QString &name, QList<QQuickItem *> &out,
+                          auto &&self) -> void {
+            if (!root)
+                return;
+            if (root->objectName() == name)
+                out.append(root);
+            const auto items = root->childItems();
+            for (auto *c : items)
+                self(c, name, out, self);
+        };
+        QTimer::singleShot(
+            1200, &app, [&appController, &classModel, &planModel, &app, findAll]() mutable {
+                appController.newProject(QStringLiteral("烟测空校"), 5, 7, 4, 20);
+                const qint64 cid = classModel.appendRow();
+                classModel.set(0, QStringLiteral("name"), QStringLiteral("1班"));
+                planModel.setCurrentClassId(cid);
+                QQuickWindow *w = nullptr;
+                const auto windows = QGuiApplication::allWindows();
+                for (auto *win : windows) {
+                    auto *qw = qobject_cast<QQuickWindow *>(win);
+                    if (qw && qw->property("currentPage").isValid())
+                        w = qw;
+                }
+                if (!w) {
+                    app.exit(11);
+                    return;
+                }
+                w->setProperty("currentPage", 4); // 教学计划
+                QTimer::singleShot(700, &app, [&app, w, findAll]() mutable {
+                    QList<QQuickItem *> states, cards;
+                    findAll(w->contentItem(), QStringLiteral("planEmptyState"), states, findAll);
+                    findAll(w->contentItem(), QStringLiteral("planTableCard"), cards, findAll);
+                    if (states.isEmpty() || cards.isEmpty() || !states.first()->isVisible()) {
+                        qWarning("smoke-plan-empty: 未找到可见的 planEmptyState/planTableCard");
+                        app.exit(11);
+                        return;
+                    }
+                    auto *st = states.first();
+                    auto *card = cards.first();
+                    const QPointF sc = st->mapToScene(QPointF(st->width() / 2, st->height() / 2));
+                    const QPointF cc =
+                        card->mapToScene(QPointF(card->width() / 2, card->height() / 2));
+                    qWarning("smoke-plan-empty: 空状态中心(%.0f,%.0f) 卡片中心(%.0f,%.0f)", sc.x(),
+                             sc.y(), cc.x(), cc.y());
+                    const QString shot =
+                        QDir::temp().filePath(QStringLiteral("smoke_plan_empty.png"));
+                    const QImage img = w->grabWindow();
+                    if (img.isNull() || !img.save(shot)) {
+                        app.exit(13);
+                        return;
+                    }
+                    if (qAbs(sc.x() - cc.x()) > 8 || qAbs(sc.y() - cc.y()) > 8) {
+                        qWarning("smoke-plan-empty: 空状态未居中");
+                        app.exit(12);
+                        return;
+                    }
+                    app.exit(0);
+                });
+            });
+    }
+
     return app.exec();
 }
