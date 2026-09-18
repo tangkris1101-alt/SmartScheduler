@@ -5,7 +5,7 @@
 #define MyAppNameEn "SmartScheduler"
 ; 版本号可被命令行覆盖：iscc /DMyAppVersion=1.0.2 ...
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.17"
+  #define MyAppVersion "1.0.18"
 #endif
 #define MyAppPublisher "SmartScheduler"
 #define MyAppExeName "SmartScheduler.exe"
@@ -47,4 +47,6 @@ Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; postinstall 在静默模式下也会执行（除非 skipifsilent）——一键更新走 /VERYSILENT，
+; 曾带 skipifsilent 导致静默更新后不会自动启动新版本；runasoriginaluser 避免以管理员身份启动
+Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall runasoriginaluser

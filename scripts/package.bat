@@ -9,7 +9,7 @@ setlocal enabledelayedexpansion
 cd /d %~dp0\..
 
 set VER=%~1
-if "%VER%"=="" set VER=1.0.17
+if "%VER%"=="" set VER=1.0.18
 
 set QTDIR=C:\Qt\6.8.1\mingw_64
 set PATH=C:\Qt\Tools\CMake_64\bin;C:\Qt\Tools\Ninja;C:\Qt\Tools\mingw1310_64\bin;%QTDIR%\bin;%PATH%
@@ -33,6 +33,8 @@ if not exist %ZIP% tar -a -cf %ZIP% -C deploy . || exit /b 1
 echo 已生成 %ZIP%
 
 echo [4/4] Inno Setup 安装包（可选）...
+rem Inno Setup 按用户安装时可能未入 PATH，补上默认位置
+if exist "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" set PATH=%LOCALAPPDATA%\Programs\Inno Setup 6;%PATH%
 where iscc >nul 2>nul
 if %errorlevel% equ 0 (
     iscc /DMyAppVersion=%VER% installer\SmartScheduler.iss && echo 安装包见 installer\Output\
