@@ -242,6 +242,30 @@ Item {
                         contentWidth: 110 + app.daysPerWeek * app.periodsPerDay * cellW
                         contentHeight: masterColumn.implicitHeight
 
+                        ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                        WheelHandler {
+                            acceptedModifiers: Qt.NoModifier | Qt.ShiftModifier
+                            onWheel: function (wheel) {
+                                const shift = wheel.modifiers & Qt.ShiftModifier
+                                const delta = wheel.pixelDelta.y !== 0 ? wheel.pixelDelta.y : wheel.angleDelta.y / 4
+                                if (shift) {
+                                    const maxX = Math.max(0, masterFlick.contentWidth - masterFlick.width)
+                                    masterFlick.contentX = Math.max(0, Math.min(maxX, masterFlick.contentX - delta))
+                                } else {
+                                    const maxY = Math.max(0, masterFlick.contentHeight - masterFlick.height)
+                                    if (masterFlick.contentHeight > masterFlick.height) {
+                                        masterFlick.contentY = Math.max(0, Math.min(maxY, masterFlick.contentY - delta))
+                                    } else {
+                                        const maxX2 = Math.max(0, masterFlick.contentWidth - masterFlick.width)
+                                        masterFlick.contentX = Math.max(0, Math.min(maxX2, masterFlick.contentX - delta))
+                                    }
+                                }
+                                wheel.accepted = true
+                            }
+                        }
+
                         property int cellW: 64
                         property var masterRows: { root.rev; return app.masterGrid() }
 
