@@ -18,6 +18,7 @@
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QUrl>
 #include <algorithm>
 
@@ -1389,6 +1390,8 @@ void AppController::tryUpdateDownload()
     }
     const QString url = m_downloadUrls.at(m_dlAttempt++);
     const QString setup = m_latestSetup;
+    m_updateDlPercent = 0; // 换通道后进度重新计
+    Q_EMIT updateDlStateChanged();
     QDir tmp = QDir::temp();
     tmp.mkpath(QStringLiteral("SmartScheduler-update"));
     const QString dst = tmp.filePath(QStringLiteral("SmartScheduler-update/") + setup);
@@ -1417,6 +1420,19 @@ void AppController::tryUpdateDownload()
             Q_EMIT updateDlStateChanged();
         }
     });
+    // 慢速通道早期熔断：8 秒仍不到 5%（约 200KB/s 以下）就换下一通道；
+    // 末位候选（GitHub 直连）不限速，保证慢网用户最终仍能完整下载
+    if (m_dlAttempt < m_downloadUrls.size()) {
+        auto *timer = new QTimer(reply);
+        timer->setSingleShot(true);
+        connect(timer, &QTimer::timeout, this, [this, reply, url]() {
+            if (m_updateDlPercent >= 5)
+                return;
+            qWarning("自动更新: 通道 %s 速度过慢（8 秒内不足 5%%），改试下一通道", qPrintable(url));
+            reply->abort(); // 触发 finished 的错误分支，自动换通道
+        });
+        timer->start(8000);
+    }
     connect(reply, &QNetworkReply::finished, this, [this, reply, file, dst, url]() {
         reply->deleteLater();
         file->write(reply->readAll());
