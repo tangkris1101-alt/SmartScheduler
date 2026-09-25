@@ -161,6 +161,11 @@ Item {
                         enabled: root.currentEntityId() >= 0
                         onClicked: app.clearNoSchedule(root.entityType, root.currentEntityId())
                     }
+                    AppButton {
+                        text: qsTr("按年级组批量设置…")
+                        visible: root.mode === 0
+                        onClicked: groupMaskDialog.open()
+                    }
                     Item { Layout.fillWidth: true }
                     Text {
                         text: qsTr("点击单元格切换；点星期/节次表头可整列/整行切换")
@@ -357,6 +362,165 @@ Item {
                             title: root.preMode === 0 ? qsTr("请先添加班级") : qsTr("请先添加老师")
                             hint: qsTr("在「名单管理」页添加后回到这里")
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // 年级组作息遮罩：把「每周天数 / 每天节数」范围外的槽位批量设为组内班级的不排
+    Popup {
+        id: groupMaskDialog
+        parent: Overlay.overlay
+        modal: true
+        anchors.centerIn: parent
+        width: 500
+
+        property var groups: []
+
+        function reload() {
+            groups = app.gradeGroups()
+            groupCombo.currentIndex = groups.length > 0 ? 0 : -1
+            prefill()
+        }
+        function prefill() {
+            const i = groupCombo.currentIndex
+            const g = (i >= 0 && i < groups.length) ? groups[i] : null
+            if (g && g.maskDays > 0) {
+                daysSpin.value = g.maskDays
+                periodsSpin.value = g.maskPeriods
+            } else {
+                daysSpin.value = app.daysPerWeek
+                periodsSpin.value = app.periodsPerDay
+            }
+        }
+        function currentGroupId() {
+            const i = groupCombo.currentIndex
+            return (i >= 0 && i < groups.length) ? groups[i].id : -1
+        }
+        function hasMask() {
+            const i = groupCombo.currentIndex
+            return i >= 0 && i < groups.length && groups[i].maskDays > 0
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusL
+            color: Theme.surface
+            border.color: Theme.border
+        }
+        Overlay.modal: Rectangle {
+            color: Theme.dark ? Qt.rgba(0, 0, 0, 0.55) : Qt.rgba(15, 23, 42, 0.28)
+        }
+        enter: Transition {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 150 }
+            NumberAnimation { property: "scale"; from: 0.92; to: 1; duration: 150; easing.type: Easing.OutCubic }
+        }
+        exit: Transition {
+            NumberAnimation { property: "opacity"; from: 1; to: 0; duration: 110 }
+        }
+        onOpened: reload()
+
+        contentItem: ColumnLayout {
+            spacing: Theme.spacingM
+
+            Text {
+                Layout.topMargin: Theme.spacingL
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                text: qsTr("按年级组设置作息")
+                font.pixelSize: Theme.fontTitle
+                font.bold: true
+                color: Theme.text
+            }
+            Text {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                text: qsTr("全局课表按最大作息设置；这里把组内班级超出本组作息的格子批量设为「不排」。应用后可在课表查看页看到灰格。")
+                font.pixelSize: Theme.fontCaption
+                color: Theme.textSecondary
+                wrapMode: Text.WordWrap
+            }
+
+            GridLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: Theme.spacingL
+                rowSpacing: Theme.spacingM
+
+                Text { text: qsTr("年级组"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                AppComboBox {
+                    id: groupCombo
+                    Layout.fillWidth: true
+                    model: {
+                        let names = []
+                        for (let i = 0; i < groupMaskDialog.groups.length; ++i) {
+                            const g = groupMaskDialog.groups[i]
+                            const mask = g.maskDays > 0
+                                       ? qsTr("，已设 %1 天 × %2 节").arg(g.maskDays).arg(g.maskPeriods)
+                                       : ""
+                            names.push(qsTr("%1（%2 个班%3）").arg(g.name).arg(g.memberCount).arg(mask))
+                        }
+                        return names
+                    }
+                    onActivated: groupMaskDialog.prefill()
+                }
+
+                Text { text: qsTr("每周上课天数"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                AppStepper {
+                    id: daysSpin
+                    from: 1; to: app.daysPerWeek; value: app.daysPerWeek
+                    suffix: qsTr(" 天")
+                }
+
+                Text { text: qsTr("每天节数"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                AppStepper {
+                    id: periodsSpin
+                    from: 1; to: app.periodsPerDay; value: app.periodsPerDay
+                    suffix: qsTr(" 节")
+                }
+            }
+
+            RowLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.bottomMargin: Theme.spacingL
+                Layout.topMargin: Theme.spacingXS
+                Layout.fillWidth: true
+                spacing: Theme.spacingS
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: groupMaskDialog.groups.length === 0
+                    text: qsTr("还没有年级组，请先到「归类分组」创建")
+                    color: Theme.warning
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.WordWrap
+                }
+                AppButton {
+                    text: qsTr("取消")
+                    onClicked: groupMaskDialog.close()
+                }
+                AppButton {
+                    text: qsTr("清除越界禁排")
+                    enabled: groupMaskDialog.hasMask()
+                    onClicked: {
+                        app.applyGradeMask(groupMaskDialog.currentGroupId(), daysSpin.value,
+                                           periodsSpin.value, false)
+                        root.refresh()
+                    }
+                }
+                AppButton {
+                    text: qsTr("应用遮罩")
+                    variant: "primary"
+                    enabled: groupMaskDialog.currentGroupId() >= 0
+                    onClicked: {
+                        app.applyGradeMask(groupMaskDialog.currentGroupId(), daysSpin.value,
+                                           periodsSpin.value, true)
+                        root.refresh()
+                        groupMaskDialog.close()
                     }
                 }
             }

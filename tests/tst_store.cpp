@@ -1,6 +1,8 @@
 #include "ProjectStore.h"
 #include "model/School.h"
 
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QtTest/QTest>
 
@@ -15,6 +17,7 @@ private Q_SLOTS:
     void roundTrip();
     void openNonExistent();
     void overwriteSave();
+    void migrateFromV1();
 };
 
 // 造一所 2 班 / 3 课 / 2 师 / 1 教室 / 1 合班组 + 约束与预排的学校
@@ -47,6 +50,8 @@ static School makeSampleSchool()
     c2.gradeId = gradeId;
     const qint64 class2 = school.addClass(c2);
     school.findGroup(gradeId)->memberIds = {class1, class2};
+    school.findGroup(gradeId)->maskDays = 4; // 年级组作息遮罩（schema v2）
+    school.findGroup(gradeId)->maskPeriods = 7;
 
     Group jiaoyanzu;
     jiaoyanzu.type = Group::Type::CourseGroup;
@@ -223,6 +228,44 @@ void TestStore::openNonExistent()
     School s;
     QVERIFY(!store.save(s));
     QVERIFY(!store.load(&s));
+}
+
+// v1 老工程（entity_groups 无 mask 列）打开时应自动迁移补列
+void TestStore::migrateFromV1()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("v1.spk"));
+
+    {
+        ProjectStore store;
+        QVERIFY2(store.createNew(path), qPrintable(store.lastError()));
+        QVERIFY2(store.save(makeSampleSchool()), qPrintable(store.lastError()));
+    }
+
+    // 手工降级为 v1：删掉新列、版本号改回 1
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                    QStringLiteral("downgrade"));
+        db.setDatabaseName(path);
+        QVERIFY(db.open());
+        QSqlQuery q(db);
+        QVERIFY(q.exec(QStringLiteral("ALTER TABLE entity_groups DROP COLUMN mask_days")));
+        QVERIFY(q.exec(QStringLiteral("ALTER TABLE entity_groups DROP COLUMN mask_periods")));
+        QVERIFY(q.exec(QStringLiteral("UPDATE meta SET value='1' WHERE key='schema_version'")));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("downgrade"));
+
+    School loaded;
+    {
+        ProjectStore store;
+        QVERIFY2(store.open(path), qPrintable(store.lastError())); // 触发迁移
+        QVERIFY2(store.load(&loaded), qPrintable(store.lastError()));
+    }
+    QCOMPARE(loaded.groups.size(), 2);
+    QCOMPARE(loaded.groups.first().memberIds.size(), 2);
+    QCOMPARE(loaded.groups.first().maskDays, -1); // 老工程无遮罩
 }
 
 void TestStore::overwriteSave()

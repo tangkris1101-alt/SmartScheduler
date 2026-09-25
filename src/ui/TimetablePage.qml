@@ -332,7 +332,9 @@ Item {
                                             width: masterFlick.cellW; height: 34
                                             radius: 3
                                             color: {
-                                                if (modelData.courseId === undefined) return "transparent"
+                                                if (modelData.courseId === undefined)
+                                                    return modelData.blocked === true ? Theme.overlayPress
+                                                                                     : "transparent"
                                                 if (root.highlightCourse >= 0 && modelData.courseId === root.highlightCourse)
                                                     return Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.22)
                                                 return modelData.major ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.08)
@@ -373,6 +375,12 @@ Item {
                         visible: root.viewMode > 0 && app.hasSchedule && root.currentEntityId() >= 0
                         revision: root.rev
                         editable: root.adjustMode && root.viewMode === 1
+                        cellState: function (day, period) {
+                            if (root.viewMode !== 1) return 0
+                            const cell = root.entityRow()[day * app.periodsPerDay + period]
+                            if (!cell) return 0
+                            return (cell.blocked === true && cell.courseId === undefined) ? 1 : 0
+                        }
                         cellText: function (day, period) {
                             const slot = day * app.periodsPerDay + period
                             const row = root.entityRow()

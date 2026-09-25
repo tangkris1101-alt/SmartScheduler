@@ -344,6 +344,17 @@ static auto findNoSchedule(S &school, int entityType, qint64 entityId)
     return static_cast<decltype(&school.noScheduleConstraints.first())>(nullptr);
 }
 
+// 某班某槽位是否被班级级不排约束禁止
+bool classSlotForbidden(const sched::School &school, qint64 classId, int slot)
+{
+    for (const auto &c : school.noScheduleConstraints) {
+        if (c.entityType == sched::NoScheduleConstraint::EntityType::Class && c.entityId == classId
+            && c.slots.contains(slot))
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 QVariantList AppController::noScheduleSlots(int entityType, qint64 entityId) const
@@ -392,6 +403,96 @@ void AppController::clearNoSchedule(int entityType, qint64 entityId)
     if (!c)
         return;
     m_school.removeNoScheduleConstraint(c->id);
+    markDirty();
+    Q_EMIT constraintsChanged();
+}
+
+QVariantList AppController::gradeGroups() const
+{
+    QVariantList out;
+    for (const auto &g : m_school.groups) {
+        if (g.type != sched::Group::Type::Grade)
+            continue;
+        out.append(QVariantMap{{QStringLiteral("id"), g.id},
+                               {QStringLiteral("name"), g.name},
+                               {QStringLiteral("memberCount"), g.memberIds.size()},
+                               {QStringLiteral("maskDays"), g.maskDays},
+                               {QStringLiteral("maskPeriods"), g.maskPeriods}});
+    }
+    return out;
+}
+
+void AppController::applyGradeMask(qint64 groupId, int activeDays, int activePeriods, bool forbidden)
+{
+    sched::Group *g = m_school.findGroup(groupId);
+    if (!g || g->type != sched::Group::Type::Grade)
+        return;
+    const int ppd = m_school.timeConfig.periodsPerDay;
+    const int total = m_school.timeConfig.slotCount();
+    activeDays = std::clamp(activeDays, 1, m_school.timeConfig.daysPerWeek);
+    activePeriods = std::clamp(activePeriods, 1, ppd);
+    const int oldDays = g->maskDays;
+    const int oldPeriods = g->maskPeriods;
+
+    auto outside = [ppd](int slot, int days, int periods) {
+        return slot / ppd >= days || slot % ppd >= periods;
+    };
+    auto applyRange = [&](int days, int periods, bool block) {
+        bool touched = false;
+        for (qint64 cid : g->memberIds) {
+            if (!m_school.findClass(cid))
+                continue;
+            for (int slot = 0; slot < total; ++slot) {
+                if (!outside(slot, days, periods))
+                    continue;
+                sched::NoScheduleConstraint *c = findNoSchedule(
+                    m_school, static_cast<int>(sched::NoScheduleConstraint::EntityType::Class), cid);
+                if (block) {
+                    if (!c) {
+                        sched::NoScheduleConstraint nc;
+                        nc.entityType = sched::NoScheduleConstraint::EntityType::Class;
+                        nc.entityId = cid;
+                        m_school.addNoScheduleConstraint(nc);
+                        c = &m_school.noScheduleConstraints.last(); // add 追加在末尾
+                        touched = true;
+                    }
+                    if (!c->slots.contains(slot)) {
+                        c->slots.insert(slot);
+                        touched = true;
+                    }
+                } else {
+                    if (!c || !c->slots.contains(slot))
+                        continue;
+                    c->slots.remove(slot);
+                    touched = true;
+                    if (c->slots.isEmpty()) {
+                        m_school.removeNoScheduleConstraint(c->id);
+                        c = nullptr;
+                    }
+                }
+            }
+        }
+        return touched;
+    };
+
+    bool changed = false;
+    // 先撤销上一次遮罩，保证「应用」与「清除」都精确落在遮罩范围上
+    if (oldDays > 0 && oldPeriods > 0)
+        changed |= applyRange(oldDays, oldPeriods, false);
+    if (forbidden) {
+        changed |= applyRange(activeDays, activePeriods, true);
+        g->maskDays = activeDays;
+        g->maskPeriods = activePeriods;
+        changed = true; // 遮罩状态本身也是数据
+    } else {
+        if (oldDays > 0) {
+            g->maskDays = -1;
+            g->maskPeriods = -1;
+            changed = true;
+        }
+    }
+    if (!changed)
+        return;
     markDirty();
     Q_EMIT constraintsChanged();
 }
@@ -687,6 +788,7 @@ QVariantList AppController::classRow(qint64 classId) const
     const int sc = m_school.timeConfig.slotCount();
     for (int slot = 0; slot < sc; ++slot) {
         QVariantMap cell;
+        bool hasCourse = false;
         for (const auto &a : m_school.schedule.assignments) {
             if (a.classId != classId || a.slotIndex != slot)
                 continue;
@@ -715,6 +817,7 @@ QVariantList AppController::classRow(qint64 classId) const
                     {QStringLiteral("half"), a.half},
                     {QStringLiteral("major"), co && co->isMajor},
                     {QStringLiteral("pre"), pre}};
+            hasCourse = true;
             break; // 整节优先；单双周同格只取第一条
         }
         // 单双周同格第二条
@@ -723,21 +826,24 @@ QVariantList AppController::classRow(qint64 classId) const
             if (a.classId == classId && a.slotIndex == slot && a.half != 0) {
                 const sched::Course *co = m_school.findCourse(a.courseId);
                 const QString t = co ? co->name : QStringLiteral("?");
-                if (cell.isEmpty()) {
+                if (!hasCourse) {
                     cell = {{QStringLiteral("text"), t},
                             {QStringLiteral("sub"), QString()},
                             {QStringLiteral("courseId"), a.courseId},
                             {QStringLiteral("half"), a.half},
                             {QStringLiteral("major"), co && co->isMajor},
                             {QStringLiteral("pre"), false}};
+                    hasCourse = true;
                 } else if (cell.value(QStringLiteral("half")).toInt() != 0
                            && cell.value(QStringLiteral("courseId")).toLongLong() != a.courseId) {
                     secondText = t + (a.half == 1 ? QStringLiteral("单") : QStringLiteral("双"));
                 }
             }
         }
-        if (!secondText.isEmpty() && !cell.isEmpty())
+        if (!secondText.isEmpty() && hasCourse)
             cell.insert(QStringLiteral("sub2"), secondText);
+        if (classSlotForbidden(m_school, classId, slot))
+            cell.insert(QStringLiteral("blocked"), true);
         row.append(cell);
     }
     return row;
@@ -833,6 +939,8 @@ QVariantList AppController::masterGrid() const
                         {QStringLiteral("half"), a.half}};
                 break;
             }
+            if (classSlotForbidden(m_school, c.id, slot))
+                cell.insert(QStringLiteral("blocked"), true);
             cells[slot] = cell;
         }
         rows.append(QVariantMap{{QStringLiteral("classId"), c.id},
@@ -1073,8 +1181,9 @@ void AppController::createSampleSchool(bool autoSchedule)
 
     if (autoSchedule) {
         m_sampleAutoApply = true;
-        runScheduler({{QStringLiteral("runs"), 2},
-                      {QStringLiteral("maxIterations"), 20000},
+        // 示例计划已排满整周（零余量），提高搜索预算以保证稳定零硬违例
+        runScheduler({{QStringLiteral("runs"), 3},
+                      {QStringLiteral("maxIterations"), 40000},
                       {QStringLiteral("randomSeed"), true},
                       {QStringLiteral("placeAll"), true}});
     }

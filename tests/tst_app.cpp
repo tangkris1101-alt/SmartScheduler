@@ -36,6 +36,7 @@ private Q_SLOTS:
     void dutyModelOps();
     void combinedModelValidation();
     void constraintsAndPreassign();
+    void gradeMask();
     void updateProjectInfo();
     void schedulerBridge();
     void adjustRulesMatrix();
@@ -482,6 +483,53 @@ void TestApp::constraintsAndPreassign()
     app.toggleTeacherActivity(ids.tZhang, 19, ids.yuwen);
     QCOMPARE(app.teacherActivities(ids.tZhang).size(), 0);
     QVERIFY(app.projectDirty());
+}
+
+void TestApp::gradeMask()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    sched::Group g;
+    g.type = sched::Group::Type::Grade;
+    g.name = QStringLiteral("一年级");
+    const qint64 gid = app.school()->addGroup(g);
+    app.school()->findGroup(gid)->memberIds = {ids.class1, ids.class2};
+
+    // 年级组列表
+    const QVariantList groups = app.gradeGroups();
+    QCOMPARE(groups.size(), 1);
+    QCOMPARE(groups.first().toMap().value(QStringLiteral("memberCount")).toInt(), 2);
+
+    // 作息 5 天 × 5 节：每天第 6-7 节（共 10 格/班）禁排
+    app.applyGradeMask(gid, 5, 5, true);
+    QCOMPARE(app.noScheduleSlots(0, ids.class1).size(), 10);
+    QCOMPARE(app.noScheduleSlots(0, ids.class2).size(), 10);
+    QVERIFY(app.noScheduleSlots(0, ids.class1).contains(5)); // 周一第 6 节
+    QVERIFY(!app.noScheduleSlots(0, ids.class1).contains(4)); // 周一第 5 节仍在
+
+    // 课表数据带 blocked 标记
+    const QVariantList row = app.classRow(ids.class1);
+    QVERIFY(row[5].toMap().value(QStringLiteral("blocked")).toBool());
+    QVERIFY(!row[4].toMap().value(QStringLiteral("blocked")).toBool());
+
+    // 改设为 4 天 × 7 节：旧遮罩先撤销，只保留周六整列（7 格）
+    app.applyGradeMask(gid, 4, 7, true);
+    QCOMPARE(app.noScheduleSlots(0, ids.class1).size(), 7);
+    QVERIFY(app.noScheduleSlots(0, ids.class1).contains(28)); // 周六第 1 节
+    QVERIFY(!app.noScheduleSlots(0, ids.class1).contains(5)); // 旧遮罩已还原
+
+    // 清除：按记录的遮罩精确还原
+    app.applyGradeMask(gid, 5, 7, false);
+    QCOMPARE(app.noScheduleSlots(0, ids.class1).size(), 0);
+    QCOMPARE(app.school()->noScheduleConstraints.size(), 0);
+    QVERIFY(!app.classRow(ids.class1)[5].toMap().value(QStringLiteral("blocked")).toBool());
+
+    // 越界取值被钳制；非年级组忽略；无遮罩时清除不改数据
+    app.applyGradeMask(gid, 99, 99, true);
+    QCOMPARE(app.school()->findGroup(gid)->maskDays, 5);
+    QCOMPARE(app.noScheduleSlots(0, ids.class1).size(), 0);
+    app.applyGradeMask(-1, 1, 1, true);
+    QCOMPARE(app.school()->noScheduleConstraints.size(), 0);
 }
 
 void TestApp::updateProjectInfo()

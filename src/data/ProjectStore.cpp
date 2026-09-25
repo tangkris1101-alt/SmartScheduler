@@ -11,8 +11,7 @@ namespace sched {
 
 namespace {
 
-constexpr int kSchemaVersion = 1;
-
+constexpr int kSchemaVersion = 2;
 // 具名名单公共列（id,name,long_name,short_name,code,priority,remark）的读写辅助
 
 // null QString 会被绑定为 SQL NULL，违反 NOT NULL；统一转为空串
@@ -103,11 +102,31 @@ bool ProjectStore::open(const QString &path)
     QSqlQuery q(m_db);
     if (!q.exec(QStringLiteral("SELECT value FROM meta WHERE key='schema_version'")) || !q.next())
         return fail(QStringLiteral("不是有效的 SmartScheduler 工程文件（缺少 meta 表）"));
-    if (q.value(0).toInt() > kSchemaVersion)
+    const int fileVersion = q.value(0).toInt();
+    if (fileVersion > kSchemaVersion)
         return fail(QStringLiteral("工程文件版本过新（%1），当前程序支持到 %2")
-                        .arg(q.value(0).toInt())
+                        .arg(fileVersion)
                         .arg(kSchemaVersion));
+    if (fileVersion < kSchemaVersion && !migrate(fileVersion))
+        return false;
     return true;
+}
+
+// 旧工程升级：按版本逐级补列/改数据
+bool ProjectStore::migrate(int fromVersion)
+{
+    if (fromVersion < 2) {
+        // 年级组作息遮罩：mask_days / mask_periods
+        const char *alters[] = {
+            "ALTER TABLE entity_groups ADD COLUMN mask_days INTEGER NOT NULL DEFAULT -1",
+            "ALTER TABLE entity_groups ADD COLUMN mask_periods INTEGER NOT NULL DEFAULT -1"};
+        for (const char *sql : alters) {
+            if (!exec(QString::fromLatin1(sql)))
+                return false;
+        }
+    }
+    return exec(QStringLiteral("UPDATE meta SET value='%1' WHERE key='schema_version'")
+                    .arg(kSchemaVersion));
 }
 
 void ProjectStore::close()
@@ -150,7 +169,8 @@ bool ProjectStore::createSchema()
         " priority INTEGER NOT NULL DEFAULT 0, remark TEXT NOT NULL DEFAULT '',"
         " capacity INTEGER NOT NULL DEFAULT 1)",
         "CREATE TABLE entity_groups("
-        " id INTEGER PRIMARY KEY, type INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT '')",
+        " id INTEGER PRIMARY KEY, type INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT '',"
+        " mask_days INTEGER NOT NULL DEFAULT -1, mask_periods INTEGER NOT NULL DEFAULT -1)",
         "CREATE TABLE group_members("
         " group_id INTEGER NOT NULL REFERENCES entity_groups(id) ON DELETE CASCADE,"
         " member_id INTEGER NOT NULL, PRIMARY KEY(group_id, member_id))",
@@ -327,7 +347,8 @@ bool ProjectStore::save(const School &school)
     // entity_groups + group_members
     {
         QSqlQuery qg(m_db), qm(m_db);
-        if (!qg.prepare(QStringLiteral("INSERT INTO entity_groups(id,type,name) VALUES(?,?,?)"))
+        if (!qg.prepare(QStringLiteral(
+                "INSERT INTO entity_groups(id,type,name,mask_days,mask_periods) VALUES(?,?,?,?,?)"))
             || !qm.prepare(QStringLiteral("INSERT INTO group_members(group_id,member_id) VALUES(?,?)"))) {
             rollback();
             return fail(qg.lastError().text() + qm.lastError().text());
@@ -336,6 +357,8 @@ bool ProjectStore::save(const School &school)
             qg.addBindValue(g.id);
             qg.addBindValue(static_cast<int>(g.type));
             qg.addBindValue(textValue(g.name));
+            qg.addBindValue(g.maskDays);
+            qg.addBindValue(g.maskPeriods);
             if (!qg.exec()) {
                 rollback();
                 return fail(qg.lastError().text());
@@ -609,13 +632,15 @@ bool ProjectStore::load(School *school)
     // entity_groups + group_members
     {
         QSqlQuery qg(m_db);
-        if (!qg.exec(QStringLiteral("SELECT id,type,name FROM entity_groups ORDER BY id")))
+        if (!qg.exec(QStringLiteral("SELECT id,type,name,mask_days,mask_periods FROM entity_groups ORDER BY id")))
             return fail(qg.lastError().text());
         while (qg.next()) {
             Group g;
             g.id = qg.value(0).toLongLong();
             g.type = static_cast<Group::Type>(qg.value(1).toInt());
             g.name = qg.value(2).toString();
+            g.maskDays = qg.value(3).toInt();
+            g.maskPeriods = qg.value(4).toInt();
             school->groups.append(g);
         }
         QSqlQuery qm(m_db);

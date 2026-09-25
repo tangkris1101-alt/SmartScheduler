@@ -169,9 +169,9 @@ int main(int argc, char *argv[])
     });
     if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("reopen-dirty")) {
         QTimer::singleShot(1200, &app, [&appController, &app]() {
-            // 确保最近文件里有一个可打开的项目
+            // 确保最近文件里有一个可打开的项目（列表可能指向已被删除的文件）
             QString prev = appController.recentFiles().value(0);
-            if (prev.isEmpty()) {
+            if (prev.isEmpty() || !QFile::exists(prev)) {
                 appController.newProject(QStringLiteral("烟测旧校"), 5, 7, 4, 20);
                 prev = QDir::temp().filePath(QStringLiteral("smoke_prev.spk"));
                 if (!appController.saveProjectAs(prev)) {

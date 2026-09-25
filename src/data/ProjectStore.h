@@ -38,6 +38,7 @@ public:
 
 private:
     bool createSchema();
+    bool migrate(int fromVersion);
     bool exec(const QString &sql);
     bool fail(const QString &message);
 

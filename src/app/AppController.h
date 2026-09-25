@@ -108,6 +108,11 @@ public:
     Q_INVOKABLE void setNoScheduleSlot(int entityType, qint64 entityId, int slot, bool forbidden);
     Q_INVOKABLE void clearNoSchedule(int entityType, qint64 entityId);
 
+    // ---- 年级组作息遮罩：把「每周天数 / 每天节数」范围外的槽位批量设为不排 ----
+    Q_INVOKABLE QVariantList gradeGroups() const; // 年级组 [{id, name, memberCount}]
+    // forbidden=true 禁排越界槽位，false 恢复；activeDays/activePeriods 为组内作息范围
+    Q_INVOKABLE void applyGradeMask(qint64 groupId, int activeDays, int activePeriods, bool forbidden);
+
     // ---- 固定预排 ----
     Q_INVOKABLE QVariantList preAssignments(qint64 classId) const; // [{courseId, courseName, slotIndex}]
     Q_INVOKABLE void togglePreAssignment(qint64 classId, qint64 courseId, int slot);

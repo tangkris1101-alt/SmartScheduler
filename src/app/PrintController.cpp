@@ -122,6 +122,29 @@ QString roomCellText(const sched::School &s, qint64 roomId, int slot)
     return lines.join(QStringLiteral("\n"));
 }
 
+// 某实体在某槽位是否被不排约束禁止
+bool slotForbidden(const sched::School &s, sched::NoScheduleConstraint::EntityType type, qint64 id,
+                   int slot)
+{
+    for (const auto &c : s.noScheduleConstraints) {
+        if (c.entityType == type && c.entityId == id && c.slots.contains(slot))
+            return true;
+    }
+    return false;
+}
+
+// 该槽位是否对全校所有班级都禁排（打印时可整列裁掉）
+bool slotForbiddenForAllClasses(const sched::School &s, int slot)
+{
+    if (s.classes.isEmpty())
+        return false;
+    for (const auto &c : s.classes) {
+        if (!slotForbidden(s, sched::NoScheduleConstraint::EntityType::Class, c.id, slot))
+            return false;
+    }
+    return true;
+}
+
 // 页眉：校名 + 标题 + 说明
 void paintHeader(QPainter &p, const QRect &area, const sched::School &s, const QString &title,
                  const PrintOptions &opt)
@@ -143,18 +166,50 @@ void paintHeader(QPainter &p, const QRect &area, const sched::School &s, const Q
     }
 }
 
-// 通用周课表网格（天×节次）
+// 通用周课表网格（天×节次）；skipSlot 非空时裁掉整列/整行都禁排的槽位
 void paintWeekGrid(QPainter &p, const QRect &area, const sched::School &s, const PrintOptions &opt,
-                   const std::function<QString(int slot)> &cellAt)
+                   const std::function<QString(int slot)> &cellAt,
+                   const std::function<bool(int slot)> &skipSlot = {})
 {
     const auto &tc = s.timeConfig;
     const int days = tc.daysPerWeek;
     const int periods = tc.periodsPerDay;
 
-    const int headH = area.height() / (periods + 3);
-    const int headW = area.width() / (days + 3);
-    const int rowH = (area.height() - headH) / periods;
-    const int colW = (area.width() - headW) / days;
+    // 可见天/节次：整列或整行全部禁排时裁掉
+    QVector<int> dayList, periodList;
+    for (int d = 0; d < days; ++d) {
+        bool anyAllowed = false;
+        for (int pr = 0; pr < periods; ++pr) {
+            if (!skipSlot || !skipSlot(tc.slotIndex(d, pr))) {
+                anyAllowed = true;
+                break;
+            }
+        }
+        if (anyAllowed)
+            dayList.append(d);
+    }
+    for (int pr = 0; pr < periods; ++pr) {
+        bool anyAllowed = false;
+        for (int d = 0; d < days; ++d) {
+            if (!skipSlot || !skipSlot(tc.slotIndex(d, pr))) {
+                anyAllowed = true;
+                break;
+            }
+        }
+        if (anyAllowed)
+            periodList.append(pr);
+    }
+    const int shownDays = std::max(1, int(dayList.size()));
+    const int shownPeriods = std::max(1, int(periodList.size()));
+    if (dayList.isEmpty())
+        dayList.append(0);
+    if (periodList.isEmpty())
+        periodList.append(0);
+
+    const int headH = area.height() / (shownPeriods + 3);
+    const int headW = area.width() / (shownDays + 3);
+    const int rowH = (area.height() - headH) / shownPeriods;
+    const int colW = (area.width() - headW) / shownDays;
 
     QFont f = p.font();
     f.setPointSize(opt.fontSize);
@@ -163,37 +218,49 @@ void paintWeekGrid(QPainter &p, const QRect &area, const sched::School &s, const
     // 表头
     p.drawText(QRect(area.left(), area.top(), headW, headH),
                Qt::AlignCenter, QStringLiteral("节次"));
-    for (int d = 0; d < days; ++d)
-        p.drawText(QRect(area.left() + headW + d * colW, area.top(), colW, headH), Qt::AlignCenter,
-                   kDayNames[d]);
+    for (int i = 0; i < dayList.size(); ++i)
+        p.drawText(QRect(area.left() + headW + i * colW, area.top(), colW, headH), Qt::AlignCenter,
+                   kDayNames[dayList[i]]);
 
     const QPen thin(Qt::gray, 1);
     const QPen thick(Qt::black, 2);
-    for (int pr = 0; pr < periods; ++pr) {
-        const int y = area.top() + headH + pr * rowH;
+    for (int i = 0; i < periodList.size(); ++i) {
+        const int pr = periodList[i];
+        const int y = area.top() + headH + i * rowH;
         p.drawText(QRect(area.left(), y, headW, rowH), Qt::AlignCenter,
                    QStringLiteral("第%1节").arg(pr + 1));
-        for (int d = 0; d < days; ++d) {
-            const QRect cell(area.left() + headW + d * colW, y, colW, rowH);
+        for (int j = 0; j < dayList.size(); ++j) {
+            const QRect cell(area.left() + headW + j * colW, y, colW, rowH);
             p.setPen(thin);
             p.drawRect(cell);
-            const QString text = cellAt(tc.slotIndex(d, pr));
+            const QString text = cellAt(tc.slotIndex(dayList[j], pr));
             if (!text.isEmpty())
                 p.drawText(cell.adjusted(2, 2, -2, -2), Qt::AlignCenter | Qt::TextWordWrap, text);
         }
     }
     // 外框与午休分隔
     p.setPen(thick);
-    p.drawRect(QRect(area.left(), area.top(), headW + days * colW, headH + periods * rowH));
+    p.drawRect(QRect(area.left(), area.top(), headW + shownDays * colW, headH + shownPeriods * rowH));
     if (opt.lunchLine && tc.morningPeriods > 0 && tc.morningPeriods < periods) {
-        const int y = area.top() + headH + tc.morningPeriods * rowH;
-        p.drawLine(area.left(), y, area.left() + headW + days * colW, y);
+        // 午休线画在上午最后一节之后
+        int idx = -1;
+        for (int i = 0; i < periodList.size(); ++i) {
+            if (periodList[i] >= tc.morningPeriods) {
+                idx = i;
+                break;
+            }
+        }
+        const int cut = idx < 0 ? periodList.size() : idx;
+        if (cut > 0 && cut < periodList.size()) {
+            const int y = area.top() + headH + cut * rowH;
+            p.drawLine(area.left(), y, area.left() + headW + shownDays * colW, y);
+        }
     }
     p.setPen(thin);
-    for (int d = 0; d <= days; ++d)
-        p.drawLine(area.left() + headW + d * colW, area.top(), area.left() + headW + d * colW,
-                   area.top() + headH + periods * rowH);
-    p.drawLine(area.left(), area.top() + headH, area.left() + headW + days * colW,
+    for (int j = 0; j <= shownDays; ++j)
+        p.drawLine(area.left() + headW + j * colW, area.top(), area.left() + headW + j * colW,
+                   area.top() + headH + shownPeriods * rowH);
+    p.drawLine(area.left(), area.top() + headH, area.left() + headW + shownDays * colW,
                area.top() + headH);
 }
 
@@ -223,8 +290,14 @@ void paintEntityTable(QPainter &p, const QRect &page, const sched::School &s, co
         cellAt = [&](int slot) { return roomCellText(s, id, slot); };
     }
     paintHeader(p, QRect(area.left(), area.top(), area.width(), headerH), s, title, opt);
+    std::function<bool(int)> skipSlot;
+    if (scope == QLatin1StringView("class")) {
+        skipSlot = [&](int slot) {
+            return slotForbidden(s, sched::NoScheduleConstraint::EntityType::Class, id, slot);
+        };
+    }
     paintWeekGrid(p, QRect(area.left(), area.top() + headerH, area.width(), area.height() - headerH),
-                  s, opt, cellAt);
+                  s, opt, cellAt, skipSlot);
 }
 
 // 总课表（行=班级，列=节次），rowsPerPage 分页
@@ -242,7 +315,18 @@ void paintMasterPage(QPainter &p, const QRect &page, const sched::School &s, int
     const QRect gridArea(area.left(), area.top() + headerH, area.width(), area.height() - headerH);
     const int nameW = gridArea.width() / 12;
     const int headH = gridArea.height() / (rowsPerPage + 4);
-    const int colW = (gridArea.width() - nameW) / slots;
+    // 对全校所有班级都禁排的列（如统一不上的周末/末节）打印时裁掉
+    QVector<int> cols;
+    for (int sl = 0; sl < slots; ++sl) {
+        if (!slotForbiddenForAllClasses(s, sl))
+            cols.append(sl);
+    }
+    if (cols.isEmpty()) {
+        for (int sl = 0; sl < slots; ++sl)
+            cols.append(sl);
+    }
+    const int shownCols = int(cols.size());
+    const int colW = (gridArea.width() - nameW) / shownCols;
     const int rowH = (gridArea.height() - headH) / rowsPerPage;
 
     QFont f = p.font();
@@ -252,8 +336,9 @@ void paintMasterPage(QPainter &p, const QRect &page, const sched::School &s, int
     // 表头：节次
     p.drawText(QRect(gridArea.left(), gridArea.top(), nameW, headH), Qt::AlignCenter,
                QStringLiteral("班级"));
-    for (int sl = 0; sl < slots; ++sl) {
-        p.drawText(QRect(gridArea.left() + nameW + sl * colW, gridArea.top(), colW, headH),
+    for (int i = 0; i < shownCols; ++i) {
+        const int sl = cols[i];
+        p.drawText(QRect(gridArea.left() + nameW + i * colW, gridArea.top(), colW, headH),
                    Qt::AlignCenter,
                    QStringLiteral("%1.%2").arg(kDayNames[sl / tc.periodsPerDay].mid(1))
                        .arg(sl % tc.periodsPerDay + 1));
@@ -264,8 +349,9 @@ void paintMasterPage(QPainter &p, const QRect &page, const sched::School &s, int
         const int y = gridArea.top() + headH + (r - firstRow) * rowH;
         const auto &c = s.classes[r];
         p.drawText(QRect(gridArea.left(), y, nameW, rowH), Qt::AlignCenter, c.name);
-        for (int sl = 0; sl < slots; ++sl) {
-            const QRect cell(gridArea.left() + nameW + sl * colW, y, colW, rowH);
+        for (int i = 0; i < shownCols; ++i) {
+            const int sl = cols[i];
+            const QRect cell(gridArea.left() + nameW + i * colW, y, colW, rowH);
             p.drawRect(cell);
             QString text;
             for (const auto &a : s.schedule.assignments) {
@@ -286,7 +372,7 @@ void paintMasterPage(QPainter &p, const QRect &page, const sched::School &s, int
     }
     // 外框
     p.setPen(QPen(Qt::black, 2));
-    p.drawRect(QRect(gridArea.left(), gridArea.top(), nameW + slots * colW,
+    p.drawRect(QRect(gridArea.left(), gridArea.top(), nameW + shownCols * colW,
                      headH + (lastRow - firstRow) * rowH));
     p.setPen(QPen(Qt::gray, 1));
 }
