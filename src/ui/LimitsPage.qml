@@ -111,7 +111,9 @@ Item {
 
             ColumnLayout {
                 id: hintCol
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
                 anchors.margins: Theme.spacingM
                 spacing: Theme.spacingXS
 
@@ -139,14 +141,15 @@ Item {
             }
         }
 
-        // 提醒横幅
+        // 提醒横幅（高度随文案自适应，避免长文案被截断）
         Rectangle {
             Layout.fillWidth: true
-            height: 36
+            height: warnText.implicitHeight + Theme.spacingM * 1.5
             radius: Theme.radiusM
             color: Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.12)
             visible: root.mode === 0
             Text {
+                id: warnText
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -154,7 +157,7 @@ Item {
                 text: qsTr("提醒：「不排」设置过多可能导致排不出课表，请只设置确实必要的限制。")
                 color: Theme.warning
                 font.pixelSize: Theme.fontCaption
-                elide: Text.ElideRight
+                wrapMode: Text.WordWrap
             }
         }
 
