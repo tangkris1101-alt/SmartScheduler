@@ -71,6 +71,11 @@ Item {
                 onClicked: root.currentModel.appendRow()
             }
             AppButton {
+                text: qsTr("⊞ 批量添加…")
+                enabled: app.hasProject
+                onClicked: batchDialog.open()
+            }
+            AppButton {
                 text: qsTr("📥 Excel 导入")
                 enabled: app.hasProject
                 onClicked: importDialog.open()
@@ -195,7 +200,7 @@ Item {
                         title: app.hasProject ? qsTr("还没有%1").arg(root.tabNames[root.currentTab])
                                               : qsTr("请先新建或打开项目")
                         hint: app.hasProject
-                              ? qsTr("点击右上角「添加」新建一行，或点击「Excel 导入」批量导入")
+                              ? qsTr("「✚ 添加」加一行；「⊞ 批量添加」粘贴名单或按编号一次生成多条；表格内单击单元格即可改名")
                               : ""
                     }
                 }
@@ -225,6 +230,203 @@ Item {
     }
 
     // 模型数据变更 → 递增刷新计数，让单元格绑定重读
+    // 批量添加：粘贴多行名单 / 按「前缀+编号+后缀」批量生成
+    Popup {
+        id: batchDialog
+        parent: Overlay.overlay
+        modal: true
+        anchors.centerIn: parent
+        width: 560
+        padding: 0
+
+        property int mode: 0      // 0 粘贴名单，1 按编号生成
+        property string status: ""
+
+        function generatedNames() {
+            let out = []
+            const n = Math.max(0, genCount.value)
+            for (let i = 0; i < n; ++i)
+                out.push(genPrefix.text + (genStart.value + i) + genSuffix.text)
+            return out
+        }
+        function pendingNames() {
+            if (mode === 0)
+                return pasteArea.text.split(/\r?\n/)
+            return generatedNames()
+        }
+        function pendingCount() {
+            let n = 0
+            for (const s of pendingNames())
+                if (s.trim().length > 0) n++
+            return n
+        }
+        function apply() {
+            const added = root.currentModel.appendRows(pendingNames())
+            if (added > 0) {
+                status = qsTr("已添加 %1 行").arg(added)
+                pasteArea.text = ""
+                batchDialog.close()
+            } else {
+                status = qsTr("没有可添加的名称，请检查输入")
+            }
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusL
+            color: Theme.surface
+            border.color: Theme.border
+        }
+        Overlay.modal: Rectangle {
+            color: Theme.dark ? Qt.rgba(0, 0, 0, 0.55) : Qt.rgba(15, 23, 42, 0.28)
+        }
+        enter: Transition {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 150 }
+            NumberAnimation { property: "scale"; from: 0.92; to: 1; duration: 150; easing.type: Easing.OutCubic }
+        }
+        exit: Transition {
+            NumberAnimation { property: "opacity"; from: 1; to: 0; duration: 110 }
+        }
+        onOpened: {
+            root.rev
+            batchDialog.mode = 0
+            batchDialog.status = ""
+            pasteArea.text = ""
+            genPrefix.text = qsTr("新%1").arg(root.tabNames[root.currentTab])
+            genStart.value = 1
+            genCount.value = 4
+            genSuffix.text = ""
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.spacingS
+
+            Text {
+                Layout.topMargin: Theme.spacingL
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                text: qsTr("批量添加%1").arg(root.tabNames[root.currentTab])
+                font.pixelSize: Theme.fontTitle
+                font.bold: true
+                color: Theme.text
+            }
+            Text {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                text: qsTr("一次建多条省时间；建好后在表格里单击任意单元格即可改名")
+                font.pixelSize: Theme.fontCaption
+                color: Theme.textSecondary
+            }
+
+            AppTabs {
+                Layout.leftMargin: Theme.spacingL
+                model: [qsTr("粘贴名单"), qsTr("按编号生成")]
+                currentIndex: batchDialog.mode
+                onTabClicked: function (index) { batchDialog.mode = index }
+            }
+
+            // 模式一：粘贴多行
+            ColumnLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                spacing: Theme.spacingXS
+                visible: batchDialog.mode === 0
+
+                Text {
+                    text: qsTr("每行一个名称（可从 Excel 或文本里直接粘贴）")
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.fontCaption
+                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 180
+                    radius: Theme.radiusS
+                    color: Theme.surfaceAlt
+                    border.color: Theme.border
+                    ScrollView {
+                        anchors.fill: parent
+                        anchors.margins: Theme.spacingXS
+                        TextArea {
+                            id: pasteArea
+                            placeholderText: qsTr("高一1班\n高一2班\n高一3班")
+                            color: Theme.text
+                            font.pixelSize: Theme.fontBody
+                            wrapMode: TextArea.NoWrap
+                            background: null
+                        }
+                    }
+                }
+            }
+
+            // 模式二：前缀 + 编号 + 后缀
+            ColumnLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                spacing: Theme.spacingXS
+                visible: batchDialog.mode === 1
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: Theme.spacingM
+                    rowSpacing: Theme.spacingS
+
+                    Text { text: qsTr("名称前缀"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                    AppTextField { id: genPrefix; Layout.fillWidth: true; showClear: false }
+
+                    Text { text: qsTr("起始编号"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                    AppStepper { id: genStart; from: 1; to: 999; value: 1 }
+
+                    Text { text: qsTr("生成数量"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                    AppStepper { id: genCount; from: 1; to: 200; value: 4; suffix: qsTr(" 条") }
+
+                    Text { text: qsTr("名称后缀"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                    AppTextField { id: genSuffix; Layout.fillWidth: true; placeholder: qsTr("例如：班（可留空）"); showClear: false }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: {
+                        const names = batchDialog.generatedNames()
+                        const head = names.slice(0, 4).join(qsTr("、"))
+                        return qsTr("将生成：%1%2").arg(head).arg(names.length > 4 ? qsTr(" …") : "")
+                    }
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            RowLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.bottomMargin: Theme.spacingL
+                Layout.topMargin: Theme.spacingS
+                Layout.fillWidth: true
+                spacing: Theme.spacingS
+
+                Text {
+                    Layout.fillWidth: true
+                    text: batchDialog.status
+                    color: batchDialog.status.indexOf(qsTr("已添加")) === 0 ? Theme.success : Theme.warning
+                    font.pixelSize: Theme.fontCaption
+                    visible: batchDialog.status !== ""
+                }
+                AppButton {
+                    text: qsTr("取消")
+                    onClicked: batchDialog.close()
+                }
+                AppButton {
+                    text: qsTr("添加 %1 行").arg(batchDialog.pendingCount())
+                    variant: "primary"
+                    enabled: batchDialog.pendingCount() > 0
+                    onClicked: batchDialog.apply()
+                }
+            }
+        }
+    }
+
     Connections {
         target: root.currentModel
         function onDataChanged() { root.rev++ }

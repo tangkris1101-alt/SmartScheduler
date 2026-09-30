@@ -45,6 +45,21 @@ Item {
                              : (m.value <= 0 ? Theme.success : Theme.danger)
         return Theme.text
     }
+    function indicatorHint(key) {
+        switch (key) {
+        case "placedPeriods": return qsTr("没排满：检查教学计划的周课时是否超过课表容量，或到限制条件页放开不必要的禁排。")
+        case "teacherClash": return qsTr("老师撞课：多为跨班冲突。检查教学计划里的任课老师是否填对；两个班确实同节上课时应登记为合班。")
+        case "courseForbiddenSlot": return qsTr("课程排进了不排时段：到「限制条件 → 不排时间」选中该课程调整，或确认这些节次确实要排它。")
+        case "teacherForbiddenSlot": return qsTr("老师排进了不排时段：到「限制条件 → 不排时间」选中该老师调整禁排格子。")
+        case "chainedPlaced": return qsTr("连堂没排上：检查该课程的连堂设置（教学计划里的「连课次数 / 每次节数」）与可用时段是否冲突。")
+        case "chainGoodSlot": return qsTr("连堂位置不理想：可在「课表查看」里拖动调课，把连堂挪到第 1-2 或 4-5 节等习惯位置。")
+        case "majorMorning": return qsTr("主课排在下午：可在「课程设置」给语数英勾选「上午」，或接受现状（软指标）。")
+        case "sameCoursePerDay": return qsTr("同科一天 3 节以上：检查该课程的连堂次数是否过多，或减少单日课时。")
+        case "teacherDailyLoad": return qsTr("老师一天 5 节以上：可在「名单管理 → 老师」设置该老师的「日最多课」。")
+        case "teacherRunLength": return qsTr("老师连上 3 节以上：可调整教学计划里的连堂设置与任课分配。")
+        }
+        return ""
+    }
 
     onVisibleChanged: if (visible) root.rev++
     Connections {
@@ -97,6 +112,61 @@ Item {
             color: Theme.success
             font.pixelSize: Theme.fontCaption
             wrapMode: Text.WordWrap
+        }
+
+        // 读法引导：硬指标看问题、软指标看舒适度、老师五项看老师顺不顺
+        Rectangle {
+            Layout.fillWidth: true
+            visible: app.hasSchedule
+            height: guideCol.implicitHeight + Theme.spacingM * 2
+            radius: Theme.radiusM
+            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.08)
+            border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.35)
+
+            ColumnLayout {
+                id: guideCol
+                anchors.fill: parent
+                anchors.margins: Theme.spacingM
+                spacing: Theme.spacingXS
+
+                Text {
+                    text: qsTr("这份报告怎么看")
+                    color: Theme.text
+                    font.pixelSize: Theme.fontBody
+                    font.bold: true
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("① 先看「十项指标」里的硬项：出现红字说明有违反或没排满，回到「教学计划 / 限制条件」检查；"
+                               + "② 软项是舒适度（如连堂位置、主课是否在上午），用来在几套排法里挑更好的；"
+                               + "③ 「老师五项」看老师课表顺不顺：数字越低越好，综合 = 开窗 + 周内均衡 + 先后公平。")
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
+                    spacing: Theme.spacingS
+                    AppButton {
+                        text: qsTr("去限制条件页")
+                        variant: "subtle"
+                        onClicked: {
+                            const w = ApplicationWindow.window
+                            if (w)
+                                w.currentPage = 5
+                        }
+                    }
+                    AppButton {
+                        text: qsTr("去教学计划页")
+                        variant: "subtle"
+                        onClicked: {
+                            const w = ApplicationWindow.window
+                            if (w)
+                                w.currentPage = 4
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+            }
         }
 
         AppEmptyState {
@@ -174,9 +244,10 @@ Item {
                                         hoverEnabled: true
                                         cursorShape: Qt.WhatsThisCursor
                                         ToolTip.visible: containsMouse
-                                        ToolTip.text: modelData.hard
+                                        ToolTip.text: (modelData.hard
                                                      ? qsTr("硬指标：不许破，有值即为违例或缺口")
-                                                     : qsTr("软指标：舒适度，越低越好，可手动微调")
+                                                     : qsTr("软指标：舒适度，越低越好，可手动微调"))
+                                                    + "\n" + root.indicatorHint(modelData.key)
                                     }
                                 }
                                 Rectangle {

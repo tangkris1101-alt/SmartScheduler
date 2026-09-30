@@ -28,9 +28,9 @@ ApplicationWindow {
         { page: 4, group: "_plan",   icon: "📅", label: qsTr("教学计划"), step: 4 },
         { page: 5, group: "_plan",   icon: "🚫", label: qsTr("限制条件"), step: 5 },
         { page: 6, group: "_output", icon: "▶️", label: qsTr("自动排课"), step: 6 },
-        { page: 7, group: "_output", icon: "📊", label: qsTr("课表查看"), step: 7 },
-        { page: 8, group: "_output", icon: "🖨️", label: qsTr("打印输出"), step: 8 },
-        { page: 9, group: "_output", icon: "📈", label: qsTr("质量报告"), step: 9 },
+        { page: 7, group: "_output", icon: "📊", label: qsTr("课表查看"), step: 0 },
+        { page: 8, group: "_output", icon: "🖨️", label: qsTr("打印输出"), step: 0 },
+        { page: 9, group: "_output", icon: "📈", label: qsTr("质量报告"), step: 0 },
         { page: 10, group: "_bottom", icon: "🛠️", label: qsTr("设置"),     step: 0 }
     ]
 
@@ -48,7 +48,7 @@ ApplicationWindow {
         if (page === 3) return app.courseCount > 0 && app.teacherCount > 0 // 课程设置：有课程和老师才可配置特征
         if (page === 4) return app.planEntryCount > 0
         if (page === 5) return app.hasProject && app.constraintCount > 0 // hasProject 让项目切换时重算
-        if (page >= 6 && page <= 9) return app.hasSchedule
+        if (page === 6) return app.hasSchedule // 只有「自动排课」是流程步骤；课表/打印/报告是看结果的地方
         return false
     }
 

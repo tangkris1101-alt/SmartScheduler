@@ -225,6 +225,24 @@ qint64 NamedEntityModel::appendRow()
     return e->id;
 }
 
+int NamedEntityModel::appendRows(const QStringList &names)
+{
+    int added = 0;
+    for (const QString &raw : names) {
+        const QString name = raw.trimmed();
+        if (name.isEmpty())
+            continue;
+        sched::NamedEntity *e = createEntity();
+        e->name = name;
+        ++added;
+    }
+    if (added > 0) {
+        fullReset();
+        m_app->markDirty();
+    }
+    return added;
+}
+
 bool NamedEntityModel::removeRow(int row)
 {
     if (row < 0 || row >= m_view.size())

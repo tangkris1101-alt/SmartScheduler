@@ -187,6 +187,17 @@ Item {
                                 enabled: app.hasProject && !app.schedulerRunning
                                 onClicked: root.startRun()
                             }
+                            AppButton {
+                                Layout.fillWidth: true
+                                visible: app.hasSchedule
+                                variant: "subtle"
+                                text: qsTr("📈 看看排得怎么样（质量报告）")
+                                onClicked: {
+                                    const w = ApplicationWindow.window
+                                    if (w)
+                                        w.currentPage = 9
+                                }
+                            }
                         }
                     }
 

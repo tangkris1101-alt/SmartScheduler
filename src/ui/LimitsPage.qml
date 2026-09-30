@@ -101,6 +101,44 @@ Item {
             Item { Layout.fillWidth: true }
         }
 
+        // 硬约束说明：让「限制条件」这一页的定位一目了然
+        Rectangle {
+            Layout.fillWidth: true
+            height: hintCol.implicitHeight + Theme.spacingM * 2
+            radius: Theme.radiusM
+            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.08)
+            border.color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.35)
+
+            ColumnLayout {
+                id: hintCol
+                anchors.fill: parent
+                anchors.margins: Theme.spacingM
+                spacing: Theme.spacingXS
+
+                Text {
+                    text: qsTr("这里设置的是「硬规定」（不许破）")
+                    color: Theme.text
+                    font.pixelSize: Theme.fontBody
+                    font.bold: true
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("不排时间 / 固定预排 / 老师活动时间：系统排课时必须遵守，违反会直接体现在「质量报告」的硬指标里。"
+                               + "想按年级整体设置作息（如高三周六加课、小学每天少一节），用「按年级组批量设置…」。")
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.WordWrap
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("另外两档供理解：「可以让，但要人点头」= 手工微调；「尽量」= 质量报告的软指标与老师五项，用来挑更好的方案。")
+                    color: Theme.textDisabled
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+
         // 提醒横幅
         Rectangle {
             Layout.fillWidth: true

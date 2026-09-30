@@ -592,6 +592,18 @@ void TestApp::qualityReport()
     app.school()->addPlanEntry(e);
     app.school()->schedule.setAssignment(ids.class1, 0, 0, ids.yuwen);
 
+    // 批量添加：忽略空行与首尾空白，其余原样建行
+    CourseListModel courses(&app);
+    const int before = app.courseCount();
+    QCOMPARE(courses.appendRows({QStringLiteral(" 语文 "), QString(),
+                                 QStringLiteral("数学"), QStringLiteral("   "),
+                                 QStringLiteral("英语")}), 3);
+    QCOMPARE(app.courseCount(), before + 3);
+    QCOMPARE(courses.get(courses.count() - 3, QStringLiteral("name")).toString(),
+             QStringLiteral("语文"));
+    QCOMPARE(courses.appendRows({}), 0);
+    QCOMPARE(courses.appendRows({QStringLiteral("  ")}), 0);
+
     const QVariantMap rep = app.qualityReport();
     QCOMPARE(rep.value(QStringLiteral("hasSchedule")).toBool(), true);
     QCOMPARE(rep.value(QStringLiteral("hardViolations")).toInt(), 0);
