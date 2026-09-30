@@ -6,6 +6,7 @@
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -1617,13 +1618,16 @@ void AppController::checkUpdate(bool interactive)
 
     // 国内直连 GitHub 不稳定：优先公益反代拉取公开仓的 version.json（实时无缓存、国内可达，
     // 发布流水线每次发版写入）；其次 GitHub API 直连；最后 jsDelivr CDN（有缓存，兜底用）。
-    // 任一通道失败/超时自动回退下一个
+    // 任一通道失败/超时自动回退下一个。
+    // 注意：raw 及其反代/CDN 都会缓存文件内容（发版后可能仍读到上一个版本），
+    // 因此统一追加一次性查询参数穿透缓存，保证检查结果总是最新的。
+    const QString bust = QStringLiteral("?t=%1").arg(QDateTime::currentSecsSinceEpoch());
     m_updateSources = {
-        QStringLiteral("https://ghfast.top/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json"),
-        QStringLiteral("https://gh-proxy.com/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json"),
-        QStringLiteral("https://ghproxy.net/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json"),
+        QStringLiteral("https://ghfast.top/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust,
+        QStringLiteral("https://gh-proxy.com/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust,
+        QStringLiteral("https://ghproxy.net/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust,
         QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest"),
-        QStringLiteral("https://cdn.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json"),
+        QStringLiteral("https://cdn.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json") + bust,
     };
     m_updateAttempt = 0;
     tryUpdateSource();
@@ -1681,6 +1685,15 @@ void AppController::tryUpdateSource()
                     break;
                 }
             }
+        }
+        qWarning("检查更新: 通道 %s 返回 tag=%s（当前 v%s）", qPrintable(url), qPrintable(tag),
+                 qPrintable(appVersion()));
+        // 通道/CDN 缓存可能返回旧版本：比当前还旧时继续尝试下一通道，避免错过更新
+        if (compareVersions(tag, appVersion()) < 0) {
+            qWarning("检查更新: 通道 %s 返回的 v%s 比当前还旧（疑似缓存），尝试下一通道",
+                     qPrintable(url), qPrintable(tag));
+            tryUpdateSource();
+            return;
         }
         if (compareVersions(tag, appVersion()) > 0) {
             m_updateStatus = 3;
