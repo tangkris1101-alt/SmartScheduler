@@ -93,6 +93,9 @@ public:
                                        int morningPeriods, int weeksPerTerm);
     // 起始模板：0=空白 1=小学 2=初中 3=高中；须在 newProject 之后调用，填充课程/班级/年级组/教室
     Q_INVOKABLE void applyTemplate(int tpl);
+    // 最近打开：移除单项 / 清空列表（只改本地记录，不动磁盘文件）
+    Q_INVOKABLE void removeRecentFile(const QString &path);
+    Q_INVOKABLE void clearRecentFiles();
     Q_INVOKABLE bool openProject(const QString &pathOrUrl);
     Q_INVOKABLE bool saveProject();    // 无路径时返回 false（QML 弹出另存对话框）
     Q_INVOKABLE bool saveProjectAs(const QString &pathOrUrl);

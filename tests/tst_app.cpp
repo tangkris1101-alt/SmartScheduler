@@ -39,6 +39,7 @@ private Q_SLOTS:
     void gradeMask();
     void updateProjectInfo();
     void qualityReport();
+    void recentFilesOps();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -632,6 +633,39 @@ void TestApp::qualityReport()
     QVERIFY(html.contains(QStringLiteral("教师开窗")));
     QVERIFY(html.contains(QStringLiteral("@media print")));
     QVERIFY(html.contains(QStringLiteral("一年级"))); // 年级组分段
+}
+
+void TestApp::recentFilesOps()
+{
+    QSettings().setValue(QStringLiteral("recentFiles"), QStringList());
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppController app;
+    QSignalSpy spy(&app, &AppController::recentFilesChanged);
+
+    // 通过保存项目登记两条最近记录（最近的在最前）
+    const QString pathA = dir.filePath(QStringLiteral("a.spk"));
+    const QString pathB = dir.filePath(QStringLiteral("b.spk"));
+    app.newProject(QStringLiteral("甲校"), 5, 7, 4, 20);
+    QVERIFY(app.saveProjectAs(pathA));
+    app.newProject(QStringLiteral("乙校"), 5, 7, 4, 20);
+    QVERIFY(app.saveProjectAs(pathB));
+    QCOMPARE(app.recentFiles().size(), 2);
+    QCOMPARE(app.recentFiles().first(), pathB);
+
+    // 移除一项：只去掉该项，其余保留；移除不存在的路径不发信号
+    app.removeRecentFile(pathB);
+    QCOMPARE(app.recentFiles(), QStringList({pathA}));
+    const int before = spy.count();
+    app.removeRecentFile(dir.filePath(QStringLiteral("missing.spk")));
+    QCOMPARE(spy.count(), before);
+
+    // 清空列表；已空时不再发信号
+    app.clearRecentFiles();
+    QVERIFY(app.recentFiles().isEmpty());
+    const int afterClear = spy.count();
+    app.clearRecentFiles();
+    QCOMPARE(spy.count(), afterClear);
 }
 
 void TestApp::schedulerBridge()

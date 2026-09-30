@@ -56,6 +56,23 @@ QStringList AppController::recentFiles() const
     return QSettings().value(QStringLiteral("recentFiles")).toStringList();
 }
 
+void AppController::removeRecentFile(const QString &path)
+{
+    QStringList files = recentFiles();
+    if (!files.removeAll(path))
+        return;
+    QSettings().setValue(QStringLiteral("recentFiles"), files);
+    Q_EMIT recentFilesChanged();
+}
+
+void AppController::clearRecentFiles()
+{
+    if (recentFiles().isEmpty())
+        return;
+    QSettings().setValue(QStringLiteral("recentFiles"), QStringList());
+    Q_EMIT recentFilesChanged();
+}
+
 void AppController::addRecentFile(const QString &path)
 {
     QStringList files = recentFiles();

@@ -239,6 +239,16 @@ Flickable {
                     font.bold: true
                     color: Theme.text
                 }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.spacingS
+                    Item { Layout.fillWidth: true }
+                    AppButton {
+                        variant: "subtle"
+                        text: qsTr("清空列表")
+                        onClicked: app.clearRecentFiles()
+                    }
+                }
                 Repeater {
                     model: app.recentFiles
                     delegate: Rectangle {
@@ -249,10 +259,20 @@ Flickable {
                         radius: Theme.radiusM
                         color: recentHover.containsMouse ? Theme.overlayHover : "transparent"
                         Behavior on color { ColorAnimation { duration: 100 } }
+
+                        // 整行点击打开（放在底层，不遮挡右侧的移除按钮）
+                        MouseArea {
+                            id: recentHover
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.openProjectGuarded(modelData)
+                        }
+
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: Theme.spacingM
-                            anchors.rightMargin: Theme.spacingM
+                            anchors.rightMargin: Theme.spacingS
                             Text {
                                 text: "📄"
                                 font.pixelSize: Theme.fontBody
@@ -270,13 +290,19 @@ Flickable {
                                 color: Theme.primary
                                 font.pixelSize: Theme.fontCaption
                             }
-                        }
-                        MouseArea {
-                            id: recentHover
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.openProjectGuarded(modelData)
+                            AppButton {
+                                variant: "subtle"
+                                text: "✕"
+                                ToolTip.visible: removeHover.hovered
+                                ToolTip.text: qsTr("从列表移除（不会删除文件）")
+                                MouseArea {
+                                    id: removeHover
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    acceptedButtons: Qt.NoButton
+                                }
+                                onClicked: app.removeRecentFile(modelData)
+                            }
                         }
                     }
                 }
