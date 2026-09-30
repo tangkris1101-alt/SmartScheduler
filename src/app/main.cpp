@@ -18,6 +18,7 @@
 #include <algorithm>
 
 #include "AdjustController.h"
+#include "AiController.h"
 #include "AppController.h"
 #include "CombinedModel.h"
 #include "GroupModel.h"
@@ -85,6 +86,7 @@ int main(int argc, char *argv[])
     initLogging(); // 须在设置组织/应用名之后：AppDataLocation 依赖它们
 
     AppController appController;
+    AiController aiController(&appController);
     Theme theme;
     ClassListModel classModel(&appController);
     CourseListModel courseModel(&appController);
@@ -109,6 +111,7 @@ int main(int argc, char *argv[])
     ctx->setContextProperty(QStringLiteral("planModel"), &planModel);
     ctx->setContextProperty(QStringLiteral("dutyModel"), &dutyModel);
     ctx->setContextProperty(QStringLiteral("combinedModel"), &combinedModel);
+    ctx->setContextProperty(QStringLiteral("ai"), &aiController);
     ctx->setContextProperty(QStringLiteral("adjust"), &adjustController);
     ctx->setContextProperty(QStringLiteral("printer"), &printController);
 
@@ -203,7 +206,7 @@ int main(int argc, char *argv[])
             auto *page = new int(0);
             QTimer *timer = new QTimer(&app);
             QObject::connect(timer, &QTimer::timeout, &app, [&app, w, page, timer]() {
-                if (*page > 10) { // 0..10 共 11 页，含质量报告与设置
+                if (*page > 11) { // 0..11 共 12 页，含质量报告、AI 助手与设置
                     timer->stop();
                     app.exit(0);
                     return;
@@ -498,6 +501,71 @@ int main(int argc, char *argv[])
             });
         });
         poll->start(300);
+    }
+
+
+    // 回归自检：--smoke=ai 真实走「一句话 → 中继 → 大模型工具调用 → 待办 → 应用 → 撤销」
+    // 0 通过，51=超时或未产生待办，52=应用后数据不符，53=撤销失败
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("ai")) {
+        auto *ticks = new int(0);
+        QTimer *timer = new QTimer(&app);
+        QObject::connect(timer, &QTimer::timeout, &app,
+                         [&appController, &aiController, &app, ticks, timer]() {
+            if (++(*ticks) > 240) { // 最多等 120 秒
+                timer->stop();
+                qWarning("smoke-ai: 超时（busy=%d pending=%d err=%s）", aiController.busy(),
+                         aiController.pendingCount(), qPrintable(aiController.lastError()));
+                app.exit(51);
+                return;
+            }
+            if (*ticks == 1) {
+                appController.createSampleSchool(false);
+                qWarning("smoke-ai: 发送一句话需求");
+                aiController.sendPrompt(QStringLiteral("把全年级每天第7节都排成自习"));
+                return;
+            }
+            if (aiController.busy())
+                return;
+            timer->stop();
+            if (aiController.pendingCount() < 1) {
+                qWarning("smoke-ai: 未产生待办（err=%s）", qPrintable(aiController.lastError()));
+                app.exit(51);
+                return;
+            }
+            const int before = appController.school()->preAssignments.size();
+            const QVariantMap card = aiController.pending().first().toMap();
+            qWarning("smoke-ai: 待办=%s | %s", qPrintable(card.value(QStringLiteral("tool")).toString()),
+                     qPrintable(card.value(QStringLiteral("summary")).toString()));
+            if (card.value(QStringLiteral("tool")).toString() != QLatin1String("batch_preassign")) {
+                qWarning("smoke-ai: 工具不是批量预排");
+                app.exit(51);
+                return;
+            }
+            const QVariantMap r = aiController.applyPending({});
+            const int after = appController.school()->preAssignments.size();
+            qWarning("smoke-ai: 应用结果 applied=%d changed=%d 预排 %d → %d",
+                     r.value(QStringLiteral("applied")).toInt(),
+                     r.value(QStringLiteral("changed")).toBool() ? 1 : 0, before, after);
+            if (after - before != 30) { // 6 个班 × 5 天
+                qWarning("smoke-ai: 预排数量不符");
+                app.exit(52);
+                return;
+            }
+            if (!aiController.undo()) {
+                qWarning("smoke-ai: 撤销失败");
+                app.exit(53);
+                return;
+            }
+            if (appController.school()->preAssignments.size() != before) {
+                qWarning("smoke-ai: 撤销后数量不符");
+                app.exit(53);
+                return;
+            }
+            qWarning("smoke-ai: 全链路通过（%d → %d → %d）", before, after,
+                     appController.school()->preAssignments.size());
+            app.exit(0);
+        });
+        timer->start(500);
     }
 
     // 回归自检：--smoke=batch 批量操作（预排 / 不排 / 改课时 / 撤销）

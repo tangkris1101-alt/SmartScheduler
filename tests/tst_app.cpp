@@ -42,6 +42,7 @@ private Q_SLOTS:
     void recentFilesOps();
     void batchClassesWithAutoGroup();
     void batchOps();
+    void aiToolLayer();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -860,6 +861,92 @@ void TestApp::batchOps()
     const QVariantMap wp3 = app.batchSetWeeklyPeriods(course, {ids.class1, ids.class2}, 3);
     QCOMPARE(wp3.value(QStringLiteral("updated")).toInt(), 0);
     QVERIFY(!app.canUndoBatch());
+}
+
+
+void TestApp::aiToolLayer()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    sched::Course zixi;
+    zixi.name = QStringLiteral("自习");
+    const qint64 course = app.school()->addCourse(zixi);
+    for (qint64 cid : {ids.class1, ids.class2}) {
+        sched::PlanEntry e;
+        e.classId = cid;
+        e.courseId = course;
+        e.weeklyPeriods = 5;
+        app.school()->addPlanEntry(e);
+    }
+
+    // 工具清单：只读 + 变更都在
+    const QVariantList tools = app.aiTools();
+    QVERIFY(tools.size() >= 12);
+    QSet<QString> names;
+    for (const auto &v : tools)
+        names.insert(v.toMap().value(QStringLiteral("name")).toString());
+    QVERIFY(names.contains(QStringLiteral("batch_preassign")));
+    QVERIFY(names.contains(QStringLiteral("query_schedule")));
+    QVERIFY(names.contains(QStringLiteral("quality_report")));
+
+    // 只读工具：列班级
+    const QVariantMap classes = app.aiRunReadTool(QStringLiteral("list_classes"), {});
+    QCOMPARE(classes.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(classes.value(QStringLiteral("data")).toList().size(), 2);
+    // 只读工具：不存在的班级给出结构化错误
+    const QVariantMap bad = app.aiRunReadTool(
+        QStringLiteral("query_schedule"), {{QStringLiteral("className"), QStringLiteral("不存在班")}});
+    QCOMPARE(bad.value(QStringLiteral("ok")).toBool(), false);
+    QVERIFY(!bad.value(QStringLiteral("error")).toString().isEmpty());
+
+    // 干跑：2 班 × 5 天第 7 节 = 10 条新增
+    const QVariantMap args{{QStringLiteral("courseName"), QStringLiteral("自习")},
+                           {QStringLiteral("classNames"),
+                            QVariantList{QStringLiteral("1班"), QStringLiteral("2班")}},
+                           {QStringLiteral("days"), QVariantList{1, 2, 3, 4, 5}},
+                           {QStringLiteral("period"), 7}};
+    const QVariantMap dry = app.aiDescribe(QStringLiteral("batch_preassign"), args);
+    QCOMPARE(dry.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(dry.value(QStringLiteral("changes")).toInt(), 10);
+    QVERIFY(!dry.value(QStringLiteral("summary")).toString().isEmpty());
+    // 干跑不落盘
+    QCOMPARE(app.school()->preAssignments.size(), 0);
+
+    // 应用 + 一次撤销
+    const QVariantMap applied = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("batch_preassign")},
+                     {QStringLiteral("args"), args}}});
+    QCOMPARE(applied.value(QStringLiteral("applied")).toInt(), 1);
+    QCOMPARE(applied.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->preAssignments.size(), 10);
+    QVERIFY(app.canUndoBatch());
+    QVERIFY(app.undoLastBatch());
+    QCOMPARE(app.school()->preAssignments.size(), 0);
+
+    // 调课：干跑 + 应用（目标格必须为空）
+    app.school()->schedule.setAssignment(ids.class1, 0, 0, ids.yuwen);
+    const QVariantMap moveArgs{{QStringLiteral("className"), QStringLiteral("1班")},
+                               {QStringLiteral("fromDay"), 1},
+                               {QStringLiteral("fromPeriod"), 1},
+                               {QStringLiteral("toDay"), 1},
+                               {QStringLiteral("toPeriod"), 2}};
+    const QVariantMap moveDry = app.aiDescribe(QStringLiteral("move_cell"), moveArgs);
+    QCOMPARE(moveDry.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(moveDry.value(QStringLiteral("changes")).toInt(), 1);
+    const QVariantMap moveRun = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("move_cell")},
+                     {QStringLiteral("args"), moveArgs}}});
+    QCOMPARE(moveRun.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 1, 0).value_or(-1), ids.yuwen);
+    QVERIFY(!app.school()->schedule.courseAt(ids.class1, 0, 0).has_value());
+    QVERIFY(app.undoLastBatch());
+    QCOMPARE(app.school()->schedule.courseAt(ids.class1, 0, 0).value_or(-1), ids.yuwen);
+
+    // 目标格已占用 → 干跑就报错，不产生待办
+    app.school()->schedule.setAssignment(ids.class1, 1, 0, ids.shuxue);
+    const QVariantMap clash = app.aiDescribe(QStringLiteral("move_cell"), moveArgs);
+    QCOMPARE(clash.value(QStringLiteral("ok")).toBool(), false);
+    QVERIFY(!clash.value(QStringLiteral("error")).toString().isEmpty());
 }
 
 void TestApp::schedulerBridge()

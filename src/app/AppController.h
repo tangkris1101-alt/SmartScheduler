@@ -119,6 +119,14 @@ public:
     Q_INVOKABLE bool canUndoBatch() const { return m_hasBatchBackup; }
     Q_INVOKABLE QString lastBatchLabel() const { return m_batchBackup.label; }
     Q_INVOKABLE bool undoLastBatch(); // 撤销上一次批量操作（单级）
+
+    // ---- AI 编排：工具层（工具定义由客户端下发，中继只透传）----
+    Q_INVOKABLE QVariantList aiTools() const;          // 工具清单 [{name, description, parameters}]
+    Q_INVOKABLE QVariantMap aiRunReadTool(const QString &tool, const QVariantMap &args) const;
+    // 干跑：不落盘地算出「影响摘要 + 明细 + 警告」，供待办卡展示
+    Q_INVOKABLE QVariantMap aiDescribe(const QString &tool, const QVariantMap &args) const;
+    // 按序应用多条 AI 操作（整体一个快照，可被 undoLastBatch 一次性撤销）
+    Q_INVOKABLE QVariantMap applyAiOperations(const QVariantList &ops);
     Q_INVOKABLE bool openProject(const QString &pathOrUrl);
     Q_INVOKABLE bool saveProject();    // 无路径时返回 false（QML 弹出另存对话框）
     Q_INVOKABLE bool saveProjectAs(const QString &pathOrUrl);
@@ -250,11 +258,47 @@ private:
     bool saveToPath(const QString &path);
     void addRecentFile(const QString &path);
 
+    // AI 变更操作的规范化计划（干跑与应用共用同一套解析）
+    struct AiOpPlan {
+        bool valid = false;
+        QString error;
+        QString title;
+        QString summary;
+        QStringList details;
+        QStringList warnings;
+        int changes = 0;
+        qint64 courseId = -1;
+        QVariantList classIds;
+        QVariantList slots;
+        int half = 0;
+        int conflictMode = 0;
+        int entityType = -1;
+        QVariantList entityIds;
+        bool forbidden = true;
+        double weeklyPeriods = 0;
+        qint64 moveClassId = -1;
+        int moveFromSlot = -1;
+        int moveToSlot = -1;
+    };
+
+    // 批量操作的实现（不含快照；包装函数与 AI 多步应用共用）
+    QVariantMap batchSetPreassignmentsImpl(qint64 courseId, const QVariantList &classIds,
+                                           const QVariantList &slots, int conflictMode, int half);
+    QVariantMap batchClearPreassignmentsImpl(qint64 courseId, const QVariantList &classIds,
+                                             const QVariantList &slots);
+    QVariantMap batchSetNoScheduleImpl(int entityType, const QVariantList &ids,
+                                       const QVariantList &slots, bool forbidden);
+    QVariantMap batchSetWeeklyPeriodsImpl(qint64 courseId, const QVariantList &classIds,
+                                          double weeklyPeriods);
+    // AI 变更操作的规范化计划（干跑与应用共用同一套解析）
+    AiOpPlan planAiOperation(const QString &tool, const QVariantMap &args) const;
+
     // 批量操作前的单级快照（供「撤销本次」）
     struct BatchBackup {
         QVector<sched::PreAssignment> preAssignments;
         QVector<sched::NoScheduleConstraint> noSchedule;
         QVector<sched::PlanEntry> planEntries;
+        sched::Schedule schedule; // AI 调课也要能一并撤销
         QString label;
     };
     void makeBatchBackup(const QString &label);

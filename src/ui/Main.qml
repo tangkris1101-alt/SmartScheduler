@@ -31,7 +31,8 @@ ApplicationWindow {
         { page: 7, group: "_output", icon: "📊", label: qsTr("课表查看"), step: 0 },
         { page: 8, group: "_output", icon: "🖨️", label: qsTr("打印输出"), step: 0 },
         { page: 9, group: "_output", icon: "📈", label: qsTr("质量报告"), step: 0 },
-        { page: 10, group: "_bottom", icon: "🛠️", label: qsTr("设置"),     step: 0 }
+        { page: 10, group: "_output", icon: "🤖", label: qsTr("AI 助手"), step: 0 },
+        { page: 11, group: "_bottom", icon: "🛠️", label: qsTr("设置"),     step: 0 }
     ]
 
     function navGroupTitle(group) {
@@ -47,7 +48,7 @@ ApplicationWindow {
             return navModel
         const out = []
         for (const item of navModel) {
-            if (item.page === 0 || item.page === 10)
+            if (item.page === 0 || item.page === 11)
                 out.push(item)
         }
         return out
@@ -65,7 +66,7 @@ ApplicationWindow {
     Connections {
         target: app
         function onProjectChanged() {
-            if (!app.hasProject && win.currentPage !== 0 && win.currentPage !== 10)
+            if (!app.hasProject && win.currentPage !== 0 && win.currentPage !== 11)
                 win.currentPage = 0
         }
     }
@@ -92,10 +93,11 @@ ApplicationWindow {
     Component { id: tableComp; TimetablePage {} }
     Component { id: printComp; PrintPage {} }
     Component { id: qualityComp; QualityReportPage {} }
+    Component { id: aiComp; AiPage {} }
     Component { id: settingsComp; SettingsPage {} }
     readonly property var pageComponents: [homeComp, rosterComp, groupsComp, coursesComp,
                                            planComp, limitComp, engineComp, tableComp, printComp,
-                                           qualityComp, settingsComp]
+                                           qualityComp, aiComp, settingsComp]
 
     // ---- 关闭确认 ----
     // Qt.quit() 会再次触发窗口关闭事件 → 本守卫会把退出也拦下来；

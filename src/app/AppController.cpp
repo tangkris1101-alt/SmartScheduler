@@ -90,6 +90,648 @@ QString gradeGroupNameFor(const QString &prefix)
 
 } // namespace
 
+
+// ---- AI 工具层所需的辅助（定义见文件后部）----
+namespace {
+// 名称匹配：先精确，再包含（大小写不敏感）；找不到返回 -1
+template<typename T>
+qint64 matchByName(const QVector<T> &list, const QString &name)
+{
+    const QString want = name.trimmed();
+    if (want.isEmpty())
+        return -1;
+    for (const auto &e : list) {
+        if (e.name == want)
+            return e.id;
+    }
+    for (const auto &e : list) {
+        if (e.name.contains(want, Qt::CaseInsensitive) || want.contains(e.name, Qt::CaseInsensitive))
+            return e.id;
+    }
+    return -1;
+}
+
+sched::NoScheduleConstraint *noScheduleFor(sched::School &school, int entityType,
+                                           qint64 entityId);
+} // namespace
+
+// ---- 只读工具 ----
+QVariantMap AppController::aiRunReadTool(const QString &tool, const QVariantMap &args) const
+{
+    const auto ok = [](const QVariant &data) {
+        return QVariantMap{{QStringLiteral("ok"), true}, {QStringLiteral("data"), data}};
+    };
+    const auto err = [](const QString &msg) {
+        return QVariantMap{{QStringLiteral("ok"), false}, {QStringLiteral("error"), msg}};
+    };
+    const int ppd = m_school.timeConfig.periodsPerDay;
+    const auto dayOf = [ppd](int slot) { return slot / ppd + 1; };
+    const auto periodOf = [ppd](int slot) { return slot % ppd + 1; };
+    const auto courseNameOf = [this](qint64 id) {
+        const sched::Course *c = m_school.findCourse(id);
+        return c ? c->name : QStringLiteral("?");
+    };
+
+    if (tool == QLatin1StringView("list_classes")) {
+        QVariantList out;
+        for (const auto &c : m_school.classes) {
+            const sched::Group *g = c.gradeId >= 0 ? m_school.findGroup(c.gradeId) : nullptr;
+            out.append(QVariantMap{{QStringLiteral("name"), c.name},
+                                   {QStringLiteral("grade"), g ? g->name : QString()}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("list_courses")) {
+        QVariantList out;
+        for (const auto &c : m_school.courses) {
+            out.append(QVariantMap{{QStringLiteral("name"), c.name},
+                                   {QStringLiteral("主课"), c.isMajor},
+                                   {QStringLiteral("上下午"), static_cast<int>(c.amPmPolicy)}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("list_teachers")) {
+        QVariantList out;
+        for (const auto &t : m_school.teachers) {
+            int load = 0;
+            for (const auto &e : m_school.planEntries) {
+                if (e.teacherIds.contains(t.id))
+                    load += int(e.weeklyPeriods);
+            }
+            out.append(QVariantMap{{QStringLiteral("name"), t.name},
+                                   {QStringLiteral("日最多课"), t.maxPeriodsPerDay},
+                                   {QStringLiteral("周节数"), load}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("list_groups")) {
+        QVariantList out;
+        for (const auto &g : m_school.groups) {
+            QStringList members;
+            for (qint64 id : g.memberIds) {
+                if (const sched::ClassInfo *c = m_school.findClass(id))
+                    members << c->name;
+                else if (const sched::Teacher *t = m_school.findTeacher(id))
+                    members << t->name;
+                else if (const sched::Course *co = m_school.findCourse(id))
+                    members << co->name;
+            }
+            out.append(QVariantMap{{QStringLiteral("type"), static_cast<int>(g.type)},
+                                   {QStringLiteral("name"), g.name},
+                                   {QStringLiteral("members"), members}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("query_schedule")) {
+        const qint64 cid =
+            matchByName(m_school.classes, args.value(QStringLiteral("className")).toString());
+        if (cid < 0)
+            return err(tr("找不到班级：%1").arg(args.value(QStringLiteral("className")).toString()));
+        const int day = args.value(QStringLiteral("day")).toInt(); // 0 = 整周
+        QVariantList out;
+        for (const auto &a : m_school.schedule.assignments) {
+            if (a.classId != cid)
+                continue;
+            if (day > 0 && dayOf(a.slotIndex) != day)
+                continue;
+            out.append(QVariantMap{{QStringLiteral("星期"), dayOf(a.slotIndex)},
+                                   {QStringLiteral("节次"), periodOf(a.slotIndex)},
+                                   {QStringLiteral("课程"), courseNameOf(a.courseId)},
+                                   {QStringLiteral("半周"), a.half}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("query_plan")) {
+        const qint64 cid =
+            matchByName(m_school.classes, args.value(QStringLiteral("className")).toString());
+        if (cid < 0)
+            return err(tr("找不到班级"));
+        QVariantList out;
+        for (const auto &e : m_school.planEntries) {
+            if (e.classId != cid)
+                continue;
+            QStringList teachers;
+            for (qint64 t : e.teacherIds) {
+                if (const sched::Teacher *tt = m_school.findTeacher(t))
+                    teachers << tt->name;
+            }
+            out.append(QVariantMap{{QStringLiteral("课程"), courseNameOf(e.courseId)},
+                                   {QStringLiteral("周节数"), e.weeklyPeriods},
+                                   {QStringLiteral("连课次数"), e.chainedCount},
+                                   {QStringLiteral("连课节数"), e.chainLength},
+                                   {QStringLiteral("老师"), teachers.join(QStringLiteral("、"))}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("query_preassign")) {
+        const qint64 cid =
+            matchByName(m_school.classes, args.value(QStringLiteral("className")).toString());
+        if (cid < 0)
+            return err(tr("找不到班级"));
+        QVariantList out;
+        for (const auto &p : m_school.preAssignments) {
+            if (p.classId != cid)
+                continue;
+            out.append(QVariantMap{{QStringLiteral("星期"), dayOf(p.slotIndex)},
+                                   {QStringLiteral("节次"), periodOf(p.slotIndex)},
+                                   {QStringLiteral("课程"), courseNameOf(p.courseId)},
+                                   {QStringLiteral("半周"), p.half}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("query_no_schedule")) {
+        const QString type = args.value(QStringLiteral("entityType")).toString();
+        const int t = type == QLatin1StringView("class") ? 0
+                    : type == QLatin1StringView("course") ? 1
+                    : type == QLatin1StringView("teacher") ? 2 : 3;
+        qint64 id = -1;
+        const QString name = args.value(QStringLiteral("name")).toString();
+        if (t == 0)
+            id = matchByName(m_school.classes, name);
+        else if (t == 1)
+            id = matchByName(m_school.courses, name);
+        else if (t == 2)
+            id = matchByName(m_school.teachers, name);
+        else
+            id = matchByName(m_school.classrooms, name);
+        if (id < 0)
+            return err(tr("找不到对象：%1").arg(name));
+        const sched::NoScheduleConstraint *c = nullptr;
+        for (const auto &nc : m_school.noScheduleConstraints) {
+            if (nc.entityType == static_cast<sched::NoScheduleConstraint::EntityType>(t)
+                && nc.entityId == id) {
+                c = &nc;
+                break;
+            }
+        }
+        QVariantList out;
+        if (c) {
+            QList<int> slots = c->slots.values();
+            std::sort(slots.begin(), slots.end());
+            for (int slot : slots)
+                out.append(QVariantMap{{QStringLiteral("星期"), dayOf(slot)},
+                                       {QStringLiteral("节次"), periodOf(slot)}});
+        }
+        return ok(out);
+    }
+    if (tool == QLatin1StringView("quality_report")) {
+        const sched::QualityMetricsResult r = sched::computeQualityMetrics(m_school);
+        QVariantList ind;
+        for (const auto &i : r.indicators) {
+            ind.append(QVariantMap{{QStringLiteral("指标"), i.name},
+                                   {QStringLiteral("实测"), i.value},
+                                   {QStringLiteral("应有"), i.required},
+                                   {QStringLiteral("单位"), i.unit},
+                                   {QStringLiteral("硬性"), i.hard}});
+        }
+        return ok(QVariantMap{{QStringLiteral("指标"), ind},
+                              {QStringLiteral("老师五项平均"),
+                               QVariantMap{{QStringLiteral("教案连续性"), r.avgContinuity},
+                                           {QStringLiteral("教师开窗"), r.avgWindow},
+                                           {QStringLiteral("周内均衡"), r.avgBalance},
+                                           {QStringLiteral("先后公平"), r.avgFairness},
+                                           {QStringLiteral("综合"), r.avgComposite}}}});
+    }
+    return err(tr("未知的只读工具：%1").arg(tool));
+}
+
+
+// ---- 变更工具：干跑（描述）与一次应用 ----
+namespace {
+
+// 一条 AI 变更操作的规范化计划定义在 AppController.h（干跑与应用共用）
+QString slotLabel(const sched::TimeConfig &tc, int slot)
+{
+    static const char *kDays[] = {"周一", "周二", "周三", "周四", "周五", "周六", "周日"};
+    const int day = tc.slotDay(slot);
+    return QStringLiteral("%1 第%2节").arg(QString::fromUtf8(kDays[qBound(0, day, 6)]))
+                                     .arg(tc.slotPeriod(slot) + 1);
+}
+
+} // namespace
+
+AppController::AiOpPlan AppController::planAiOperation(const QString &tool,
+                                                       const QVariantMap &args) const
+{
+    AiOpPlan p;
+    const int ppd = m_school.timeConfig.periodsPerDay;
+    const sched::TimeConfig &tc = m_school.timeConfig;
+
+    const auto resolveClasses = [&](const QVariantList &names, QVariantList *ids, QStringList *missing) {
+        for (const QVariant &v : names) {
+            const QString name = v.toString().trimmed();
+            if (name.isEmpty())
+                continue;
+            const qint64 id = matchByName(m_school.classes, name);
+            if (id < 0)
+                missing->append(name);
+            else
+                ids->append(id);
+        }
+    };
+    const auto resolveSlots = [&](const QVariantList &days, int period, const QVariantList &periods,
+                                  QVariantList *slots) {
+        for (const QVariant &dv : days) {
+            const int day = dv.toInt();
+            if (day < 1 || day > tc.daysPerWeek)
+                continue;
+            if (!periods.isEmpty()) {
+                for (const QVariant &pv : periods) {
+                    const int per = pv.toInt();
+                    if (per >= 1 && per <= ppd)
+                        slots->append((day - 1) * ppd + per - 1);
+                }
+            } else if (period >= 1 && period <= ppd) {
+                slots->append((day - 1) * ppd + period - 1);
+            } else if (period <= 0) { // 未给节次 → 整天
+                for (int per = 1; per <= ppd; ++per)
+                    slots->append((day - 1) * ppd + per - 1);
+            }
+        }
+    };
+
+    if (tool == QLatin1StringView("batch_preassign")) {
+        p.title = tr("批量固定预排");
+        p.courseId = matchByName(m_school.courses, args.value(QStringLiteral("courseName")).toString());
+        if (p.courseId < 0) {
+            p.error = tr("找不到课程：%1").arg(args.value(QStringLiteral("courseName")).toString());
+            return p;
+        }
+        QStringList missing;
+        resolveClasses(args.value(QStringLiteral("classNames")).toList(), &p.classIds, &missing);
+        resolveSlots(args.value(QStringLiteral("days")).toList(),
+                     args.value(QStringLiteral("period")).toInt(), {}, &p.slots);
+        p.half = args.value(QStringLiteral("half")).toInt();
+        p.conflictMode = args.value(QStringLiteral("conflictMode")).toInt();
+        if (p.classIds.isEmpty() || p.slots.isEmpty()) {
+            p.error = tr("班级或时段为空");
+            return p;
+        }
+        const sched::Course *course = m_school.findCourse(p.courseId);
+        int fresh = 0, skipSame = 0, conflict = 0, notInPlan = 0;
+        for (const QVariant &cv : p.classIds) {
+            const qint64 cid = cv.toLongLong();
+            bool inPlan = false;
+            for (const auto &e : m_school.planEntries) {
+                if (e.classId == cid && e.courseId == p.courseId) {
+                    inPlan = true;
+                    break;
+                }
+            }
+            for (const QVariant &sv : p.slots) {
+                const int slot = sv.toInt();
+                if (!inPlan) {
+                    ++notInPlan;
+                    continue;
+                }
+                bool same = false, other = false;
+                for (const auto &pre : m_school.preAssignments) {
+                    if (pre.classId != cid || pre.slotIndex != slot)
+                        continue;
+                    if (pre.half == p.half && pre.courseId == p.courseId)
+                        same = true;
+                    else if (pre.half == 0 || p.half == 0)
+                        other = true;
+                }
+                if (same) {
+                    ++skipSame;
+                    continue;
+                }
+                if (other && p.conflictMode != 1) {
+                    ++conflict;
+                    continue;
+                }
+                ++fresh;
+                if (p.details.size() < 30) {
+                    const sched::ClassInfo *c = m_school.findClass(cid);
+                    p.details.append(tr("%1 %2 → 钉「%3」%4")
+                                         .arg(c ? c->name : QStringLiteral("?"),
+                                              slotLabel(tc, slot), course ? course->name : QString(),
+                                              p.half == 1 ? tr("（单周）")
+                                              : p.half == 2 ? tr("（双周）") : QString()));
+                }
+            }
+        }
+        p.changes = fresh;
+        p.summary = tr("在 %1 个班 × %2 个时段设置「%3」预排：新增 %4 条，跳过 %5 条"
+                       "（已存在 %6、与其他预排冲突 %7、班级无此课 %8）")
+                        .arg(p.classIds.size()).arg(p.slots.size())
+                        .arg(course ? course->name : QString()).arg(fresh).arg(skipSame + conflict + notInPlan)
+                        .arg(skipSame).arg(conflict).arg(notInPlan);
+        if (!missing.isEmpty())
+            p.warnings.append(tr("有班名未找到：%1").arg(missing.join(QStringLiteral("、"))));
+        if (notInPlan > 0)
+            p.warnings.append(tr("有 %1 个格子的班级教学计划里没有这门课，将跳过（可先批量加课）")
+                                  .arg(notInPlan));
+        p.valid = true;
+        return p;
+    }
+
+    if (tool == QLatin1StringView("batch_clear_preassign")) {
+        p.title = tr("批量清除预排");
+        QStringList missing;
+        resolveClasses(args.value(QStringLiteral("classNames")).toList(), &p.classIds, &missing);
+        resolveSlots(args.value(QStringLiteral("days")).toList(),
+                     args.value(QStringLiteral("period")).toInt(), {}, &p.slots);
+        const QString courseName = args.value(QStringLiteral("courseName")).toString();
+        if (!courseName.isEmpty()) {
+            p.courseId = matchByName(m_school.courses, courseName);
+            if (p.courseId < 0) {
+                p.error = tr("找不到课程：%1").arg(courseName);
+                return p;
+            }
+        }
+        if (p.classIds.isEmpty() || p.slots.isEmpty()) {
+            p.error = tr("班级或时段为空");
+            return p;
+        }
+        QSet<int> slotSet;
+        for (const QVariant &v : p.slots)
+            slotSet.insert(v.toInt());
+        QSet<qint64> classSet;
+        for (const QVariant &v : p.classIds)
+            classSet.insert(v.toLongLong());
+        for (const auto &pre : m_school.preAssignments) {
+            if (!classSet.contains(pre.classId) || !slotSet.contains(pre.slotIndex))
+                continue;
+            if (p.courseId >= 0 && pre.courseId != p.courseId)
+                continue;
+            ++p.changes;
+            if (p.details.size() < 30) {
+                const sched::ClassInfo *c = m_school.findClass(pre.classId);
+                const sched::Course *co = m_school.findCourse(pre.courseId);
+                p.details.append(tr("%1 %2：移除「%3」%4")
+                                     .arg(c ? c->name : QStringLiteral("?"), slotLabel(tc, pre.slotIndex),
+                                          co ? co->name : QString(),
+                                          pre.half == 1 ? tr("（单周）")
+                                          : pre.half == 2 ? tr("（双周）") : QString()));
+            }
+        }
+        p.summary = tr("将清除 %1 条预排").arg(p.changes);
+        if (p.changes == 0)
+            p.warnings.append(tr("这些时段本来就没有预排，无需清除"));
+        p.valid = true;
+        return p;
+    }
+
+    if (tool == QLatin1StringView("batch_no_schedule")) {
+        p.title = tr("批量设置不排时间");
+        const QString type = args.value(QStringLiteral("entityType")).toString();
+        p.entityType = type == QLatin1StringView("class") ? 0
+                     : type == QLatin1StringView("course") ? 1
+                     : type == QLatin1StringView("teacher") ? 2 : 3;
+        p.forbidden = args.value(QStringLiteral("forbidden")).toBool();
+        if (args.contains(QStringLiteral("forbidden")) && !args.value(QStringLiteral("forbidden")).toBool())
+            p.forbidden = false;
+        QStringList missing;
+        for (const QVariant &v : args.value(QStringLiteral("names")).toList()) {
+            const QString name = v.toString().trimmed();
+            if (name.isEmpty())
+                continue;
+            qint64 id = -1;
+            if (p.entityType == 0)
+                id = matchByName(m_school.classes, name);
+            else if (p.entityType == 1)
+                id = matchByName(m_school.courses, name);
+            else if (p.entityType == 2)
+                id = matchByName(m_school.teachers, name);
+            else
+                id = matchByName(m_school.classrooms, name);
+            if (id < 0)
+                missing.append(name);
+            else
+                p.entityIds.append(id);
+        }
+        resolveSlots(args.value(QStringLiteral("days")).toList(), 0,
+                     args.value(QStringLiteral("periods")).toList(), &p.slots);
+        if (p.entityIds.isEmpty() || p.slots.isEmpty()) {
+            p.error = tr("对象或时段为空");
+            return p;
+        }
+        int set = 0, cleared = 0;
+        for (const QVariant &iv : p.entityIds) {
+            const qint64 id = iv.toLongLong();
+            const sched::NoScheduleConstraint *c = nullptr;
+            for (const auto &nc : m_school.noScheduleConstraints) {
+                if (nc.entityType
+                        == static_cast<sched::NoScheduleConstraint::EntityType>(p.entityType)
+                    && nc.entityId == id) {
+                    c = &nc;
+                    break;
+                }
+            }
+            for (const QVariant &sv : p.slots) {
+                const bool has = c && c->slots.contains(sv.toInt());
+                if (p.forbidden && !has)
+                    ++set;
+                else if (!p.forbidden && has)
+                    ++cleared;
+            }
+        }
+        p.changes = p.forbidden ? set : cleared;
+        p.summary = p.forbidden
+                        ? tr("把 %1 个对象 × %2 个时段设为「不排」：新增 %3 格")
+                              .arg(p.entityIds.size()).arg(p.slots.size()).arg(set)
+                        : tr("恢复 %1 个对象 × %2 个时段的「不排」：恢复 %3 格")
+                              .arg(p.entityIds.size()).arg(p.slots.size()).arg(cleared);
+        if (p.details.size() < 30) {
+            p.details.append(tr("时段：%1").arg(
+                p.slots.size() > 6
+                    ? tr("%1 个时段（如 %2）").arg(p.slots.size())
+                          .arg(slotLabel(tc, p.slots.first().toInt()))
+                    : [&] {
+                          QStringList l;
+                          for (const QVariant &v : p.slots)
+                              l << slotLabel(tc, v.toInt());
+                          return l.join(QStringLiteral("、"));
+                      }()));
+        }
+        if (!missing.isEmpty())
+            p.warnings.append(tr("未找到对象：%1").arg(missing.join(QStringLiteral("、"))));
+        p.valid = true;
+        return p;
+    }
+
+    if (tool == QLatin1StringView("batch_weekly_periods")) {
+        p.title = tr("批量改周课时");
+        p.courseId = matchByName(m_school.courses, args.value(QStringLiteral("courseName")).toString());
+        if (p.courseId < 0) {
+            p.error = tr("找不到课程");
+            return p;
+        }
+        QStringList missing;
+        resolveClasses(args.value(QStringLiteral("classNames")).toList(), &p.classIds, &missing);
+        p.weeklyPeriods = args.value(QStringLiteral("weeklyPeriods")).toDouble();
+        if (p.classIds.isEmpty() || p.weeklyPeriods < 0) {
+            p.error = tr("班级或周节数不正确");
+            return p;
+        }
+        int updated = 0, noPlan = 0;
+        for (const QVariant &cv : p.classIds) {
+            bool found = false;
+            for (const auto &e : m_school.planEntries) {
+                if (e.classId != cv.toLongLong() || e.courseId != p.courseId)
+                    continue;
+                found = true;
+                if (!qFuzzyCompare(e.weeklyPeriods + 1.0, p.weeklyPeriods + 1.0))
+                    ++updated;
+            }
+            if (!found)
+                ++noPlan;
+        }
+        p.changes = updated;
+        const sched::Course *course = m_school.findCourse(p.courseId);
+        p.summary = tr("把「%1」在 %2 个班的周节数改为 %3 节：%4 个班会变，%5 个班没有这门课")
+                        .arg(course ? course->name : QString())
+                        .arg(p.classIds.size())
+                        .arg(p.weeklyPeriods)
+                        .arg(updated)
+                        .arg(noPlan);
+        if (noPlan > 0)
+            p.warnings.append(tr("有 %1 个班的教学计划里没有这门课（如需可先加课）").arg(noPlan));
+        p.valid = true;
+        return p;
+    }
+
+    if (tool == QLatin1StringView("move_cell")) {
+        p.title = tr("调课");
+        p.moveClassId =
+            matchByName(m_school.classes, args.value(QStringLiteral("className")).toString());
+        if (p.moveClassId < 0) {
+            p.error = tr("找不到班级");
+            return p;
+        }
+        const int fromDay = args.value(QStringLiteral("fromDay")).toInt();
+        const int fromPeriod = args.value(QStringLiteral("fromPeriod")).toInt();
+        const int toDay = args.value(QStringLiteral("toDay")).toInt();
+        const int toPeriod = args.value(QStringLiteral("toPeriod")).toInt();
+        p.moveFromSlot = (fromDay - 1) * ppd + fromPeriod - 1;
+        p.moveToSlot = (toDay - 1) * ppd + toPeriod - 1;
+        if (!tc.isValidSlot(p.moveFromSlot) || !tc.isValidSlot(p.moveToSlot)) {
+            p.error = tr("星期或节次超出范围");
+            return p;
+        }
+        qint64 fromCourse = -1, toCourse = -1;
+        for (const auto &a : m_school.schedule.assignments) {
+            if (a.classId != p.moveClassId)
+                continue;
+            if (a.slotIndex == p.moveFromSlot)
+                fromCourse = a.courseId;
+            if (a.slotIndex == p.moveToSlot)
+                toCourse = a.courseId;
+        }
+        const sched::ClassInfo *c = m_school.findClass(p.moveClassId);
+        if (fromCourse < 0) {
+            p.error = tr("%1 的 %2 本来就没有课").arg(c ? c->name : QString(),
+                                                     slotLabel(tc, p.moveFromSlot));
+            return p;
+        }
+        if (toCourse >= 0) {
+            p.error = tr("目标格 %1 已有课（%2）；请先把它调走或指定空格")
+                          .arg(slotLabel(tc, p.moveToSlot), m_school.findCourse(toCourse)->name);
+            return p;
+        }
+        p.changes = 1;
+        p.summary = tr("把 %1 的 %2 的「%3」挪到 %4")
+                        .arg(c ? c->name : QString(), slotLabel(tc, p.moveFromSlot),
+                             m_school.findCourse(fromCourse)->name, slotLabel(tc, p.moveToSlot));
+        p.valid = true;
+        return p;
+    }
+
+    p.error = tr("未知的变更工具：%1").arg(tool);
+    return p;
+}
+
+QVariantMap AppController::aiDescribe(const QString &tool, const QVariantMap &args) const
+{
+    const AiOpPlan p = planAiOperation(tool, args);
+    return QVariantMap{{QStringLiteral("ok"), p.valid},
+                       {QStringLiteral("error"), p.error},
+                       {QStringLiteral("title"), p.title},
+                       {QStringLiteral("summary"), p.summary},
+                       {QStringLiteral("details"), p.details},
+                       {QStringLiteral("warnings"), p.warnings},
+                       {QStringLiteral("changes"), p.changes}};
+}
+
+QVariantMap AppController::applyAiOperations(const QVariantList &ops)
+{
+    QVariantMap out;
+    if (!m_hasProject || ops.isEmpty()) {
+        out.insert(QStringLiteral("applied"), 0);
+        out.insert(QStringLiteral("changed"), false);
+        return out;
+    }
+    cancelScheduler();
+    makeBatchBackup(tr("AI 变更"));
+
+    QVariantList results;
+    bool changed = false;
+    int applied = 0;
+    for (const QVariant &v : ops) {
+        const QVariantMap op = v.toMap();
+        const QString tool = op.value(QStringLiteral("tool")).toString();
+        const AiOpPlan p = planAiOperation(tool, op.value(QStringLiteral("args")).toMap());
+        if (!p.valid) {
+            results.append(QVariantMap{{QStringLiteral("tool"), tool},
+                                       {QStringLiteral("ok"), false},
+                                       {QStringLiteral("error"), p.error}});
+            continue;
+        }
+        QVariantMap r;
+        if (tool == QLatin1StringView("batch_preassign")) {
+            r = batchSetPreassignmentsImpl(p.courseId, p.classIds, p.slots, p.conflictMode, p.half);
+            changed = changed || r.value(QStringLiteral("set")).toInt() > 0;
+        } else if (tool == QLatin1StringView("batch_clear_preassign")) {
+            r = batchClearPreassignmentsImpl(p.courseId, p.classIds, p.slots);
+            changed = changed || r.value(QStringLiteral("cleared")).toInt() > 0;
+        } else if (tool == QLatin1StringView("batch_no_schedule")) {
+            r = batchSetNoScheduleImpl(p.entityType, p.entityIds, p.slots, p.forbidden);
+            changed = changed || r.value(QStringLiteral("set")).toInt() > 0
+                   || r.value(QStringLiteral("cleared")).toInt() > 0;
+        } else if (tool == QLatin1StringView("batch_weekly_periods")) {
+            r = batchSetWeeklyPeriodsImpl(p.courseId, p.classIds, p.weeklyPeriods);
+            changed = changed || r.value(QStringLiteral("updated")).toInt() > 0;
+        } else if (tool == QLatin1StringView("move_cell")) {
+            qint64 course = -1;
+            int half = 0;
+            for (const auto &a : m_school.schedule.assignments) {
+                if (a.classId == p.moveClassId && a.slotIndex == p.moveFromSlot) {
+                    course = a.courseId;
+                    half = a.half;
+                    break;
+                }
+            }
+            if (course >= 0) {
+                m_school.schedule.removeAssignment(p.moveClassId, p.moveFromSlot, half);
+                m_school.schedule.setAssignment(p.moveClassId, p.moveToSlot, half, course);
+                markDirty();
+                Q_EMIT scheduleChanged();
+                changed = true;
+                r = QVariantMap{{QStringLiteral("moved"), 1}};
+            } else {
+                r = QVariantMap{{QStringLiteral("moved"), 0}};
+            }
+        } else {
+            results.append(QVariantMap{{QStringLiteral("tool"), tool},
+                                       {QStringLiteral("ok"), false},
+                                       {QStringLiteral("error"), tr("未知工具")}});
+            continue;
+        }
+        ++applied;
+        results.append(QVariantMap{{QStringLiteral("tool"), tool},
+                                   {QStringLiteral("ok"), true},
+                                   {QStringLiteral("result"), r}});
+    }
+    if (!changed)
+        discardBatchBackup();
+    out.insert(QStringLiteral("applied"), applied);
+    out.insert(QStringLiteral("changed"), changed);
+    out.insert(QStringLiteral("results"), results);
+    return out;
+}
+
 QVariantMap AppController::addClassesWithAutoGroup(const QStringList &names)
 {
     QVariantMap out;
@@ -146,6 +788,110 @@ QVariantMap AppController::addClassesWithAutoGroup(const QStringList &names)
     return out;
 }
 
+// ==================== AI 编排：工具层 ====================
+//
+// 工具定义由客户端生成并随请求下发（中继只透传），所以这里加工具不需要动服务端。
+// 只读工具立即执行；变更工具走 aiDescribe() 干跑 → 待办卡 → applyAiOperations() 应用。
+
+namespace {
+
+QVariantMap toolParam(const QString &type, const QString &desc)
+{
+    return {{QStringLiteral("type"), type}, {QStringLiteral("description"), desc}};
+}
+
+} // namespace
+
+QVariantList AppController::aiTools() const
+{
+    const auto fn = [](const QString &name, const QString &desc, const QVariantMap &props,
+                       const QVariantList &required) {
+        return QVariantMap{{QStringLiteral("name"), name},
+                           {QStringLiteral("description"), desc},
+                           {QStringLiteral("parameters"),
+                            QVariantMap{{QStringLiteral("type"), QStringLiteral("object")},
+                                        {QStringLiteral("properties"), props},
+                                        {QStringLiteral("required"), required}}}};
+    };
+    const QVariantMap classNames = toolParam(QStringLiteral("array"),
+                                             tr("班级名列表，如 [\"高一1班\",\"高一2班\"]；"
+                                                "可用 list_classes 查询"));
+    const QVariantMap courseName = toolParam(QStringLiteral("string"), tr("课程名，如 \"自习\""));
+    const QVariantMap days = toolParam(QStringLiteral("array"),
+                                       tr("星期列表，1=周一 … 7=周日"));
+    const QVariantMap period = toolParam(QStringLiteral("integer"), tr("第几节，1 起"));
+    const QVariantMap half = toolParam(QStringLiteral("integer"),
+                                       tr("半周：0 整节（默认）、1 单周、2 双周；"
+                                          "两门课各占半周即可共用同一格"));
+
+    QVariantList out;
+    // ---- 只读 ----
+    out << fn(QStringLiteral("list_classes"), tr("列出全部班级"), {}, {});
+    out << fn(QStringLiteral("list_courses"), tr("列出全部课程及其周节数设置"), {}, {});
+    out << fn(QStringLiteral("list_teachers"), tr("列出全部老师及其每日最多课时"),
+              {}, {});
+    out << fn(QStringLiteral("list_groups"), tr("列出年级组与教研组及其成员"), {}, {});
+    out << fn(QStringLiteral("query_schedule"),
+              tr("查看某班课表（可选只看某一天），返回每格的课程"),
+              {{QStringLiteral("className"), toolParam(QStringLiteral("string"), tr("班级名"))},
+               {QStringLiteral("day"), toolParam(QStringLiteral("integer"), tr("星期 1-7，省略=整周"))}},
+              {QStringLiteral("className")});
+    out << fn(QStringLiteral("query_plan"), tr("查看某班教学计划（课程/周节数/连堂/老师）"),
+              {{QStringLiteral("className"), toolParam(QStringLiteral("string"), tr("班级名"))}},
+              {QStringLiteral("className")});
+    out << fn(QStringLiteral("query_preassign"), tr("查看某班的固定预排"),
+              {{QStringLiteral("className"), toolParam(QStringLiteral("string"), tr("班级名"))}},
+              {QStringLiteral("className")});
+    out << fn(QStringLiteral("query_no_schedule"), tr("查看某个对象的「不排时间」"),
+              {{QStringLiteral("entityType"),
+                toolParam(QStringLiteral("string"), tr("class/course/teacher/classroom"))},
+               {QStringLiteral("name"), toolParam(QStringLiteral("string"), tr("对象名"))}},
+              {QStringLiteral("entityType"), QStringLiteral("name")});
+    out << fn(QStringLiteral("quality_report"),
+              tr("读排课质量报告（十项指标 + 老师五项），可用于判断改完之后是否更好"), {}, {});
+    // ---- 变更（挂起待批）----
+    out << fn(QStringLiteral("batch_preassign"),
+              tr("批量固定预排：给一批班级的指定时段钉上某门课（如全年级每天第 8 节自习）"),
+              {{QStringLiteral("courseName"), courseName}, {QStringLiteral("classNames"), classNames},
+               {QStringLiteral("days"), days}, {QStringLiteral("period"), period},
+               {QStringLiteral("half"), half}},
+              {QStringLiteral("courseName"), QStringLiteral("classNames"), QStringLiteral("days"),
+               QStringLiteral("period")});
+    out << fn(QStringLiteral("batch_clear_preassign"),
+              tr("批量清除预排：把一批班级指定时段的预排去掉（可按课程）"),
+              {{QStringLiteral("classNames"), classNames}, {QStringLiteral("days"), days},
+               {QStringLiteral("period"), period}, {QStringLiteral("courseName"), courseName}},
+              {QStringLiteral("classNames"), QStringLiteral("days"), QStringLiteral("period")});
+    out << fn(QStringLiteral("batch_no_schedule"),
+              tr("批量设置/恢复「不排时间」：对象可以是班级、课程、老师、教室"),
+              {{QStringLiteral("entityType"),
+                toolParam(QStringLiteral("string"), tr("class/course/teacher/classroom"))},
+               {QStringLiteral("names"), toolParam(QStringLiteral("array"), tr("对象名列表"))},
+               {QStringLiteral("days"), days},
+               {QStringLiteral("periods"),
+                toolParam(QStringLiteral("array"), tr("节次列表，1 起；省略=该天全部节次"))},
+               {QStringLiteral("forbidden"),
+                toolParam(QStringLiteral("boolean"), tr("true 禁排 / false 恢复，默认 true"))}},
+              {QStringLiteral("entityType"), QStringLiteral("names"), QStringLiteral("days")});
+    out << fn(QStringLiteral("batch_weekly_periods"),
+              tr("批量改周课时：把某门课在多个班级的周节数一次改到位"),
+              {{QStringLiteral("courseName"), courseName}, {QStringLiteral("classNames"), classNames},
+               {QStringLiteral("weeklyPeriods"),
+                toolParam(QStringLiteral("number"), tr("新的周节数"))}},
+              {QStringLiteral("courseName"), QStringLiteral("classNames"),
+               QStringLiteral("weeklyPeriods")});
+    out << fn(QStringLiteral("move_cell"),
+              tr("调课：把某班某格的课挪到另一格（整节）"),
+              {{QStringLiteral("className"), toolParam(QStringLiteral("string"), tr("班级名"))},
+               {QStringLiteral("fromDay"), toolParam(QStringLiteral("integer"), tr("原星期 1-7"))},
+               {QStringLiteral("fromPeriod"), toolParam(QStringLiteral("integer"), tr("原节次"))},
+               {QStringLiteral("toDay"), toolParam(QStringLiteral("integer"), tr("目标星期"))},
+               {QStringLiteral("toPeriod"), toolParam(QStringLiteral("integer"), tr("目标节次"))}},
+              {QStringLiteral("className"), QStringLiteral("fromDay"), QStringLiteral("fromPeriod"),
+               QStringLiteral("toDay"), QStringLiteral("toPeriod")});
+    return out;
+}
+
 // ==================== 批量操作（一次设置/清除 + 单级撤销）====================
 
 namespace {
@@ -166,6 +912,7 @@ void AppController::makeBatchBackup(const QString &label)
     m_batchBackup.preAssignments = m_school.preAssignments;
     m_batchBackup.noSchedule = m_school.noScheduleConstraints;
     m_batchBackup.planEntries = m_school.planEntries;
+    m_batchBackup.schedule = m_school.schedule;
     m_batchBackup.label = label;
     m_hasBatchBackup = true;
 }
@@ -184,10 +931,12 @@ bool AppController::undoLastBatch()
     m_school.preAssignments = m_batchBackup.preAssignments;
     m_school.noScheduleConstraints = m_batchBackup.noSchedule;
     m_school.planEntries = m_batchBackup.planEntries;
+    m_school.schedule = m_batchBackup.schedule;
     discardBatchBackup();
     markDirty();
     Q_EMIT projectChanged();
     Q_EMIT constraintsChanged();
+    Q_EMIT scheduleChanged();
     return true;
 }
 
@@ -214,6 +963,20 @@ QVariantMap AppController::batchSetPreassignments(qint64 courseId, const QVarian
         return out;
     cancelScheduler();
     makeBatchBackup(tr("批量预排"));
+    const QVariantMap r = batchSetPreassignmentsImpl(courseId, classIds, slots, conflictMode, half);
+    if (r.value(QStringLiteral("set")).toInt() == 0)
+        discardBatchBackup();
+    return r;
+}
+
+QVariantMap AppController::batchSetPreassignmentsImpl(qint64 courseId, const QVariantList &classIds,
+                                                      const QVariantList &slots, int conflictMode,
+                                                      int half)
+{
+    QVariantMap out{{QStringLiteral("set"), 0},
+                    {QStringLiteral("skipped"), 0},
+                    {QStringLiteral("occupied"), 0},
+                    {QStringLiteral("affected"), 0}};
 
     int set = 0, skipped = 0, occupied = 0;
     QSet<qint64> affected;
@@ -283,10 +1046,8 @@ QVariantMap AppController::batchSetPreassignments(qint64 courseId, const QVarian
     out[QStringLiteral("skipped")] = skipped;
     out[QStringLiteral("occupied")] = occupied;
     out[QStringLiteral("affected")] = affected.size();
-    if (set == 0) {
-        discardBatchBackup();
+    if (set == 0)
         return out;
-    }
     out[QStringLiteral("set")] = set;
     markDirty();
     Q_EMIT constraintsChanged();
@@ -301,6 +1062,16 @@ QVariantMap AppController::batchClearPreassignments(qint64 courseId, const QVari
         return out;
     cancelScheduler();
     makeBatchBackup(tr("批量清除预排"));
+    const QVariantMap r = batchClearPreassignmentsImpl(courseId, classIds, slots);
+    if (r.value(QStringLiteral("cleared")).toInt() == 0)
+        discardBatchBackup();
+    return r;
+}
+
+QVariantMap AppController::batchClearPreassignmentsImpl(qint64 courseId, const QVariantList &classIds,
+                                                        const QVariantList &slots)
+{
+    QVariantMap out{{QStringLiteral("cleared"), 0}, {QStringLiteral("affected"), 0}};
 
     QSet<qint64> classSet, slotSet;
     for (const QVariant &v : classIds)
@@ -322,10 +1093,8 @@ QVariantMap AppController::batchClearPreassignments(qint64 courseId, const QVari
         m_school.removePreAssignment(p.id);
         ++cleared;
     }
-    if (cleared == 0) {
-        discardBatchBackup();
+    if (cleared == 0)
         return out;
-    }
     out[QStringLiteral("cleared")] = cleared;
     out[QStringLiteral("affected")] = affected.size();
     markDirty();
@@ -343,6 +1112,18 @@ QVariantMap AppController::batchSetNoSchedule(int entityType, const QVariantList
         return out;
     cancelScheduler();
     makeBatchBackup(forbidden ? tr("批量不排") : tr("批量恢复不排"));
+    const QVariantMap r = batchSetNoScheduleImpl(entityType, ids, slots, forbidden);
+    if (r.value(QStringLiteral("set")).toInt() == 0 && r.value(QStringLiteral("cleared")).toInt() == 0)
+        discardBatchBackup();
+    return r;
+}
+
+QVariantMap AppController::batchSetNoScheduleImpl(int entityType, const QVariantList &ids,
+                                                  const QVariantList &slots, bool forbidden)
+{
+    QVariantMap out{{QStringLiteral("set"), 0},
+                    {QStringLiteral("cleared"), 0},
+                    {QStringLiteral("affected"), 0}};
 
     auto entityExists = [this, entityType](qint64 id) {
         using ET = sched::NoScheduleConstraint::EntityType;
@@ -396,10 +1177,8 @@ QVariantMap AppController::batchSetNoSchedule(int entityType, const QVariantList
             }
         }
     }
-    if (set == 0 && cleared == 0) {
-        discardBatchBackup();
+    if (set == 0 && cleared == 0)
         return out;
-    }
     out[QStringLiteral("set")] = set;
     out[QStringLiteral("cleared")] = cleared;
     out[QStringLiteral("affected")] = affected.size();
@@ -418,6 +1197,18 @@ QVariantMap AppController::batchSetWeeklyPeriods(qint64 courseId, const QVariant
         return out;
     cancelScheduler();
     makeBatchBackup(tr("批量改课时"));
+    const QVariantMap r = batchSetWeeklyPeriodsImpl(courseId, classIds, weeklyPeriods);
+    if (r.value(QStringLiteral("updated")).toInt() == 0)
+        discardBatchBackup();
+    return r;
+}
+
+QVariantMap AppController::batchSetWeeklyPeriodsImpl(qint64 courseId, const QVariantList &classIds,
+                                                     double weeklyPeriods)
+{
+    QVariantMap out{{QStringLiteral("updated"), 0},
+                    {QStringLiteral("missing"), 0},
+                    {QStringLiteral("affected"), 0}};
 
     int updated = 0, missing = 0;
     QSet<qint64> affected;
@@ -439,10 +1230,8 @@ QVariantMap AppController::batchSetWeeklyPeriods(qint64 courseId, const QVariant
         if (!found)
             ++missing;
     }
-    if (updated == 0) {
-        discardBatchBackup();
+    if (updated == 0)
         return out;
-    }
     out[QStringLiteral("updated")] = updated;
     out[QStringLiteral("missing")] = missing;
     out[QStringLiteral("affected")] = affected.size();
