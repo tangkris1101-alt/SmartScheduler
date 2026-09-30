@@ -15,6 +15,7 @@ struct PlanEntry {
     int chainedCount = 0;              // 连课次数
     int chainLength = 2;               // 每次连课节数
     int morningPeriods = -1;           // 要求排在上午的节数，-1 自动
+    int earlyPeriods = -1;             // 要求尽量排在前 N 节内，-1 不限（软约束）
     bool isCombined = false;           // 是否合班上课
     qint64 classroomId = -1;           // 指定公共教室/场地，-1 表示用本班教室
     int startWeek = 1;                 // 起始周

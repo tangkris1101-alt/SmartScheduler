@@ -24,6 +24,7 @@ struct Session {
     int progressGroup = -1;       // 进度一致组号（-1 未分组，自动归入同老师同课默认组）
     bool fixed = false;           // 预排固定，不可移动
     int fixedSlot = -1;           // 预排的起始 slot
+    int fixedHalf = 0;            // 预排占用的半周（0 整节 / 1 单周 / 2 双周）
 };
 
 struct Placement {
@@ -83,6 +84,8 @@ private:
     double evenSpreadCost() const;
     double amPmCost() const;
     double majorMorningCost() const;
+    // 计划条目的时段要求（软）：上午节数不足、以及「前 N 节」外的节次
+    double planTimePreferenceCost() const;
     double teacherDailyCost() const;
     double classCourseSpreadCost() const;
     double chainCrossCost() const;

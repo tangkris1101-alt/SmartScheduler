@@ -20,6 +20,8 @@ private Q_SLOTS:
     void progressGroupScoring();
     void randomSeedRuns();
     void unplacedDetails();
+    void preassignHalfSharesSlot();
+    void planTimePreferenceScoring();
 };
 
 // 测试校例的实体 id 记录
@@ -446,3 +448,74 @@ void TestEngine::unplacedDetails()
 QTEST_GUILESS_MAIN(TestEngine)
 
 #include "tst_engine.moc"
+
+// 预排的单双周：两门课各占半周 → 共用同一格；排课结果里两门课都落在该 slot
+void TestEngine::preassignHalfSharesSlot()
+{
+    School school;
+    school.timeConfig.daysPerWeek = 2;
+    school.timeConfig.periodsPerDay = 3;
+    school.timeConfig.morningPeriods = 2;
+    ClassInfo c1; c1.name = QStringLiteral("1班");
+    const qint64 class1 = school.addClass(c1);
+    Course a; a.name = QStringLiteral("综合实践");
+    Course b; b.name = QStringLiteral("心理");
+    const qint64 courseA = school.addCourse(a);
+    const qint64 courseB = school.addCourse(b);
+    for (qint64 co : {courseA, courseB}) {
+        PlanEntry e; e.classId = class1; e.courseId = co; e.weeklyPeriods = 0.5;
+        school.addPlanEntry(e);
+    }
+    // 同一格 slot 1：A 占单周、B 占双周
+    PreAssignment pa; pa.classId = class1; pa.courseId = courseA; pa.slotIndex = 1; pa.half = 1;
+    PreAssignment pb; pb.classId = class1; pb.courseId = courseB; pb.slotIndex = 1; pb.half = 2;
+    school.addPreAssignment(pa);
+    school.addPreAssignment(pb);
+
+    EngineOptions opt;
+    opt.runs = 1;
+    opt.maxIterationsPerRun = 200;
+    opt.seed = 7;
+    School copy = school;
+    SchedulerEngine engine(copy, opt);
+    QSignalSpy spy(&engine, &SchedulerEngine::finished);
+    engine.start();
+    QVERIFY2(spy.wait(15000), "引擎未完成");
+    const QualityReport report = spy.at(0).at(1).value<QualityReport>();
+    QCOMPARE(report.hardViolations, 0);
+    const Schedule sch = spy.at(0).at(0).value<Schedule>();
+    QCOMPARE(sch.courseAt(class1, 1, 1).value_or(-1), courseA); // 单周 = A
+    QCOMPARE(sch.courseAt(class1, 1, 2).value_or(-1), courseB); // 双周 = B
+}
+
+// 计划条目的时段要求（软）：morningPeriods 与 earlyPeriods 都应出现在软分项里
+void TestEngine::planTimePreferenceScoring()
+{
+    School school;
+    school.timeConfig.daysPerWeek = 1;
+    school.timeConfig.periodsPerDay = 4;
+    school.timeConfig.morningPeriods = 2;
+    ClassInfo c1; c1.name = QStringLiteral("1班");
+    const qint64 class1 = school.addClass(c1);
+    Course yw; yw.name = QStringLiteral("语文");
+    const qint64 yuwen = school.addCourse(yw);
+    PlanEntry e; e.classId = class1; e.courseId = yuwen; e.weeklyPeriods = 2;
+    e.earlyPeriods = 2; // 尽量排前 2 节
+    school.addPlanEntry(e);
+
+    PreAssignment p; p.classId = class1; p.courseId = yuwen; p.slotIndex = 3; // 钉在最后两节之一
+    school.addPreAssignment(p);
+
+    EngineOptions opt;
+    opt.runs = 1;
+    opt.maxIterationsPerRun = 50;
+    opt.seed = 3;
+    School copy = school;
+    SchedulerEngine engine(copy, opt);
+    QSignalSpy spy(&engine, &SchedulerEngine::finished);
+    engine.start();
+    QVERIFY2(spy.wait(15000), "引擎未完成");
+    const QualityReport report = spy.at(0).at(1).value<QualityReport>();
+    // 预排在第 4 节（0 基 3）超出「前 2 节」→ 该项必须有罚分
+    QVERIFY(report.softBreakdown.value(QStringLiteral("planTimePreference")) > 0.0);
+}

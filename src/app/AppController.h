@@ -105,7 +105,8 @@ public:
     Q_INVOKABLE QVariantList groupMemberIds(qint64 groupId) const; // 组成员 id（按教研组批量勾选用）
     // 批量固定预排：conflictMode 0=跳过已有 1=覆盖。返回 {set, skipped, occupied, affected}
     Q_INVOKABLE QVariantMap batchSetPreassignments(qint64 courseId, const QVariantList &classIds,
-                                                   const QVariantList &slots, int conflictMode);
+                                                   const QVariantList &slots, int conflictMode,
+                                                   int half = 0);
     // 批量清除预排：courseId < 0 表示不限课程。返回 {cleared, affected}
     Q_INVOKABLE QVariantMap batchClearPreassignments(qint64 courseId, const QVariantList &classIds,
                                                      const QVariantList &slots);
@@ -141,7 +142,8 @@ public:
 
     // ---- 固定预排 ----
     Q_INVOKABLE QVariantList preAssignments(qint64 classId) const; // [{courseId, courseName, slotIndex}]
-    Q_INVOKABLE void togglePreAssignment(qint64 classId, qint64 courseId, int slot);
+    // half：0 整节 / 1 单周 / 2 双周（两门课各占半周 = 共用同一格）
+    Q_INVOKABLE void togglePreAssignment(qint64 classId, qint64 courseId, int slot, int half = 0);
     Q_INVOKABLE QVariantList planCourses(qint64 classId) const;    // 该班计划内课程 [{id, name}]
     Q_INVOKABLE QVariantList courseTeachers(qint64 classId, qint64 courseId) const; // 任课老师 id 列表
 

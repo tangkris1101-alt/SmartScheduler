@@ -127,6 +127,7 @@ static School makeSampleSchool()
     e3.isCombined = true;
     e3.classroomId = roomId;
     e3.syncCourseId = -1;
+    e3.earlyPeriods = 3; // 尽量排前 3 节（软约束，schema v3）
     school.addPlanEntry(e3);
 
     CombinedGroup cg;
@@ -153,6 +154,19 @@ static School makeSampleSchool()
     p.courseId = courseTiyu;
     p.slotIndex = 2 * 7 + 4;
     school.addPreAssignment(p);
+    // 固定预排：2班 语文 单人周 / 数学 双周 —— 两门课共用同一格（schema v3）
+    PreAssignment p1;
+    p1.classId = class2;
+    p1.courseId = courseYuwen;
+    p1.slotIndex = 3 * 7 + 6;
+    p1.half = 1;
+    school.addPreAssignment(p1);
+    PreAssignment p2;
+    p2.classId = class2;
+    p2.courseId = courseShuxue;
+    p2.slotIndex = 3 * 7 + 6;
+    p2.half = 2;
+    school.addPreAssignment(p2);
 
     // 老师活动：李老师 周二第6节 教研活动（记为数学组活动）
     TeacherActivity act;
@@ -243,7 +257,7 @@ void TestStore::migrateFromV1()
         QVERIFY2(store.save(makeSampleSchool()), qPrintable(store.lastError()));
     }
 
-    // 手工降级为 v1：删掉新列、版本号改回 1
+    // 手工降级为 v1：删掉 v1→v2（作息遮罩）与 v2→v3（单双周预排 / 前 N 节）新增的列
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
                                                     QStringLiteral("downgrade"));
@@ -252,6 +266,8 @@ void TestStore::migrateFromV1()
         QSqlQuery q(db);
         QVERIFY(q.exec(QStringLiteral("ALTER TABLE entity_groups DROP COLUMN mask_days")));
         QVERIFY(q.exec(QStringLiteral("ALTER TABLE entity_groups DROP COLUMN mask_periods")));
+        QVERIFY(q.exec(QStringLiteral("ALTER TABLE preassign DROP COLUMN half")));
+        QVERIFY(q.exec(QStringLiteral("ALTER TABLE plan_entries DROP COLUMN early_periods")));
         QVERIFY(q.exec(QStringLiteral("UPDATE meta SET value='1' WHERE key='schema_version'")));
         db.close();
     }
@@ -266,6 +282,12 @@ void TestStore::migrateFromV1()
     QCOMPARE(loaded.groups.size(), 2);
     QCOMPARE(loaded.groups.first().memberIds.size(), 2);
     QCOMPARE(loaded.groups.first().maskDays, -1); // 老工程无遮罩
+    // v3 新增列按默认值补齐：预排 half=0、计划 earlyPeriods=-1
+    for (const auto &p : loaded.preAssignments)
+        QCOMPARE(p.half, 0);
+    QVERIFY(!loaded.planEntries.isEmpty());
+    for (const auto &e : loaded.planEntries)
+        QCOMPARE(e.earlyPeriods, -1);
 }
 
 void TestStore::overwriteSave()

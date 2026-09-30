@@ -12,6 +12,7 @@ Item {
 
     // 预排/活动状态
     property int preMode: 0     // 0 班级预排 1 老师活动
+    property int preHalf: 0     // 0 整节 1 单周 2 双周（两门课各占半周 = 共用一格）
     property int courseIndex: 0 // 预排课程选择（该班计划内）
     property int actCourseIndex: 0
 
@@ -45,6 +46,7 @@ Item {
             if (cid >= 0) {
                 for (const p of app.preAssignments(cid))
                     m[p.slotIndex] = p.courseName
+                                      + (p.half === 1 ? qsTr(" 单") : p.half === 2 ? qsTr(" 双") : "")
             }
             root.preMap = m
         } else {
@@ -289,6 +291,13 @@ Item {
                         onActivated: { root.preMode = index; root.refresh() }
                     }
 
+                    AppTabs {
+                        Layout.preferredWidth: 210
+                        visible: root.preMode === 0
+                        model: [qsTr("整节"), qsTr("单周"), qsTr("双周")]
+                        currentIndex: root.preHalf
+                        onTabClicked: function (index) { root.preHalf = index }
+                    }
                     AppComboBox {
                         id: preClassCombo
                         Layout.preferredWidth: 180
@@ -347,7 +356,7 @@ Item {
                     Item { Layout.fillWidth: true }
                     Text {
                         text: root.preMode === 0
-                              ? qsTr("选中课程后点击格子预排；点已预排格取消")
+                              ? qsTr("选中课程与半周后点击格子预排；点已预排格取消。两门课分别用「单周」「双周」即可共用同一格")
                               : qsTr("选中活动课程后点击格子登记活动；再次点击取消")
                         color: Theme.textDisabled
                         font.pixelSize: Theme.fontCaption
@@ -393,7 +402,8 @@ Item {
                                     } else {
                                         const list = root.planCourseList()
                                         if (root.courseIndex < list.length)
-                                            app.togglePreAssignment(cid, list[root.courseIndex].id, slot)
+                                            app.togglePreAssignment(cid, list[root.courseIndex].id, slot,
+                                                                    root.preHalf)
                                     }
                                 } else {
                                     const tid = root.teacherForActivity()

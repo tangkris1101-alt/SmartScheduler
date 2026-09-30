@@ -27,6 +27,7 @@ public:
         ChainedCountRole,
         ChainLengthRole,
         MorningPeriodsRole,
+        EarlyPeriodsRole,
         IsCombinedRole,
         ClassroomIdRole,
         ClassroomNameRole,

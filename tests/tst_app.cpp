@@ -737,6 +737,9 @@ void TestApp::batchOps()
     sched::Course zixi;
     zixi.name = QStringLiteral("自习");
     const qint64 course = app.school()->addCourse(zixi);
+    sched::Course xinli;
+    xinli.name = QStringLiteral("心理");
+    const qint64 courseXinli = app.school()->addCourse(xinli);
     sched::Group g;
     g.type = sched::Group::Type::TeacherGroup;
     g.name = QStringLiteral("数学组");
@@ -753,6 +756,13 @@ void TestApp::batchOps()
     };
     addPlan(ids.class1);
     addPlan(ids.class2);
+    for (qint64 cid : {ids.class1, ids.class2}) { // 心理：与自习共用格用
+        sched::PlanEntry e;
+        e.classId = cid;
+        e.courseId = courseXinli;
+        e.weeklyPeriods = 0.5;
+        app.school()->addPlanEntry(e);
+    }
     // 语文也在 1 班计划内（后面用它制造"该格已被别的课钉住"的冲突）
     sched::PlanEntry ywPlan;
     ywPlan.classId = ids.class1;
@@ -800,6 +810,32 @@ void TestApp::batchOps()
     QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 2);
     QVERIFY(app.undoLastBatch());
     QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 3);
+
+    // 共用格：单周钉自习、双周钉心理 → 同一格两条并存（不再算冲突）
+    const QVariantMap halfA = app.batchSetPreassignments(course, {ids.class2}, {20}, 0, 1);
+    QCOMPARE(halfA.value(QStringLiteral("set")).toInt(), 1);
+    const QVariantMap halfB = app.batchSetPreassignments(courseXinli, {ids.class2}, {20}, 0, 2);
+    QCOMPARE(halfB.value(QStringLiteral("set")).toInt(), 1);
+    int atSlot20 = 0;
+    for (const auto &p : app.school()->preAssignments) {
+        if (p.classId == ids.class2 && p.slotIndex == 20)
+            ++atSlot20;
+    }
+    QCOMPARE(atSlot20, 2);
+    // 整节与半周互斥：跳过模式下该格已有半周预排 → 整节预排被跳过
+    const QVariantMap whole = app.batchSetPreassignments(course, {ids.class2}, {20}, 0, 0);
+    QCOMPARE(whole.value(QStringLiteral("set")).toInt(), 0);
+    QCOMPARE(whole.value(QStringLiteral("skipped")).toInt(), 1);
+    // 覆盖模式下整节替换掉两条半周
+    const QVariantMap wholeForce = app.batchSetPreassignments(course, {ids.class2}, {20}, 1, 0);
+    QCOMPARE(wholeForce.value(QStringLiteral("set")).toInt(), 1);
+    int atSlot20After = 0;
+    for (const auto &p : app.school()->preAssignments) {
+        if (p.classId == ids.class2 && p.slotIndex == 20)
+            ++atSlot20After;
+    }
+    QCOMPARE(atSlot20After, 1);
+    QVERIFY(app.undoLastBatch());
 
     // 组成员（按教研组批量勾选的数据来源）
     QCOMPARE(app.groupMemberIds(gid), QVariantList{ids.tZhang});

@@ -23,11 +23,13 @@ struct NoScheduleConstraint {
 };
 
 // 固定预排：某班某课程必须排在指定节次
+// half：0=整节；1=仅单周；2=仅双周（两门课各占半周即可共用同一格）
 struct PreAssignment {
     qint64 id = -1;
     qint64 classId = -1;
     qint64 courseId = -1;
     int slotIndex = -1;
+    int half = 0;
 
     bool operator==(const PreAssignment &) const = default;
 };

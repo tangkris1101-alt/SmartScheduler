@@ -13,6 +13,7 @@ Popup {
     property int groupIndex: 0
     property var checkedClasses: ({})
     property int conflictMode: 0  // 0 跳过已有，1 覆盖
+    property int half: 0          // 0 整节 1 单周 2 双周
     property string resultText: ""
     property bool undoVisible: false
 
@@ -56,6 +57,7 @@ Popup {
         root.groupIndex = 0
         root.checkedClasses = ({})
         root.conflictMode = 0
+        root.half = 0
         root.resultText = ""
         root.undoVisible = false
         slotPicker.reset()
@@ -70,7 +72,7 @@ Popup {
             return
         }
         if (mode === 0) {
-            const r = app.batchSetPreassignments(courseId, ids, slots, conflictMode)
+            const r = app.batchSetPreassignments(courseId, ids, slots, conflictMode, half)
             resultText = qsTr("已设置 %1 条预排（%2 个班）；跳过 %3 条%4")
                     .arg(r.set).arg(r.affected).arg(r.skipped)
                     .arg(r.occupied > 0 ? qsTr("；其中 %1 格当前课表已有课，需重新排课才会生效").arg(r.occupied) : "")
@@ -111,7 +113,7 @@ Popup {
             Layout.leftMargin: Theme.spacingL
             Layout.rightMargin: Theme.spacingL
             Layout.fillWidth: true
-            text: qsTr("预排是硬规定：所选班级的这些格子必须排这门课。适合「全年级每天第 8 节自习」「各班班会固定在周一第 8 节」这类需求。")
+            text: qsTr("预排是硬规定：所选班级的这些格子必须排这门课。适合「全年级每天第 8 节自习」「各班班会固定在周一第 8 节」这类需求；两门课共用一格时，分别用「单周」「双周」各设一次即可。")
             font.pixelSize: Theme.fontCaption
             color: Theme.textSecondary
             wrapMode: Text.WordWrap
@@ -223,6 +225,12 @@ Popup {
             Layout.fillWidth: true
             visible: root.mode === 0
             spacing: Theme.spacingM
+            Text { text: qsTr("半周"); color: Theme.text; font.pixelSize: Theme.fontBody }
+            AppTabs {
+                model: [qsTr("整节"), qsTr("单周"), qsTr("双周")]
+                currentIndex: root.half
+                onTabClicked: function (index) { root.half = index }
+            }
             Text { text: qsTr("该格已有其他预排时"); color: Theme.text; font.pixelSize: Theme.fontBody }
             AppTabs {
                 model: [qsTr("跳过"), qsTr("覆盖")]

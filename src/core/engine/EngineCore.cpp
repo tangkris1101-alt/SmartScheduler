@@ -16,6 +16,8 @@ constexpr double W_DAILY_MAX = 4.0; // 老师日课时超限
 constexpr double W_DAILY_BALANCE = 0.25; // 老师日课时均匀
 constexpr double W_CLASS_COURSE_SPREAD = 2.0; // 同班同课周内分布
 constexpr double W_CHAIN_CROSS = 1.0; // 连课跨上午/下午边界
+constexpr double W_PLAN_MORNING = 1.5; // 计划条目「上午节数」不足
+constexpr double W_PLAN_EARLY = 1.5; // 计划条目落到「前 N 节」之外
 constexpr double HARD_WEIGHT = 1000.0; // 搜索中硬违例权重
 
 } // namespace
@@ -193,6 +195,7 @@ void Problem::applyPreAssignments()
         if (found >= 0) {
             sessions[found].fixed = true;
             sessions[found].fixedSlot = p.slotIndex;
+            sessions[found].fixedHalf = p.half;
         } else {
             // 无对应计划的预排：生成临时固定会话
             Session s;
@@ -207,6 +210,9 @@ void Problem::applyPreAssignments()
             }
             s.fixed = true;
             s.fixedSlot = p.slotIndex;
+            s.fixedHalf = p.half;
+            if (p.half != 0)
+                s.halfSession = true; // 只占半周（未配计划时的临时会话）
             sessions.append(s);
         }
     }
@@ -652,6 +658,38 @@ double Problem::localSoft(int s) const
             cost += W_CLASS_COURSE_SPREAD * double(it.value()) * (it.value() - 1) / 2.0;
     }
 
+    // 计划条目的时段要求（上午节数 / 前 N 节）：只与 s 所属条目相关
+    if (isPlaced(s) && ss.entryId >= 0) {
+        const PlanEntry *entry = nullptr;
+        for (const auto &e : school.planEntries) {
+            if (e.id == ss.entryId) {
+                entry = &e;
+                break;
+            }
+        }
+        if (entry) {
+            const int morningP = school.timeConfig.morningPeriods;
+            if (entry->morningPeriods > 0) {
+                int have = 0;
+                for (int i = 0; i < sessions.size(); ++i) {
+                    if (!isPlaced(i) || sessions[i].entryId != ss.entryId)
+                        continue;
+                    for (int sl : coveredSlots(i, placements[i].slot)) {
+                        if (sl % ppd < morningP)
+                            ++have;
+                    }
+                }
+                cost += W_PLAN_MORNING * std::max(0, entry->morningPeriods - have);
+            }
+            if (entry->earlyPeriods > 0) {
+                for (int sl : coveredSlots(s, placements[s].slot)) {
+                    if (sl % ppd >= entry->earlyPeriods)
+                        cost += W_PLAN_EARLY;
+                }
+            }
+        }
+    }
+
     return cost;
 }
 
@@ -664,7 +702,9 @@ double Problem::softScore(QMap<QString, double> *breakdown) const
     const double daily = teacherDailyCost();
     const double spread = classCourseSpreadCost();
     const double chain = chainCrossCost();
+    const double planTime = planTimePreferenceCost();
     if (breakdown) {
+        breakdown->insert(QStringLiteral("planTimePreference"), planTime);
         breakdown->insert(QStringLiteral("progressAlign"), progress);
         breakdown->insert(QStringLiteral("evenSpread"), even);
         breakdown->insert(QStringLiteral("amPmPolicy"), ampm);
@@ -673,7 +713,49 @@ double Problem::softScore(QMap<QString, double> *breakdown) const
         breakdown->insert(QStringLiteral("classCourseSpread"), spread);
         breakdown->insert(QStringLiteral("chainAmPmCross"), chain);
     }
-    return progress + even + ampm + major + daily + spread + chain;
+    return progress + even + ampm + major + daily + spread + chain + planTime;
+}
+
+// 计划条目的时段要求：morningPeriods = 要求排在上午的节数（数不足记罚分）；
+// earlyPeriods = 尽量排在前 N 节内（超出即罚）
+double Problem::planTimePreferenceCost() const
+{
+    const int ppd = periodsPerDay();
+    const int morning = school.timeConfig.morningPeriods;
+    QHash<qint64, QVector<int>> periodCount; // 条目 → 每个节次的节数
+    for (int s = 0; s < sessions.size(); ++s) {
+        const Placement &pl = placements[s];
+        if (pl.slot < 0)
+            continue;
+        const Session &ss = sessions[s];
+        if (ss.entryId < 0)
+            continue; // 临时会话（无计划条目）
+        QVector<int> &counts = periodCount[ss.entryId];
+        if (counts.isEmpty())
+            counts = QVector<int>(ppd, 0);
+        const int startPeriod = pl.slot % ppd;
+        for (int i = 0; i < std::max(1, ss.length) && startPeriod + i < ppd; ++i)
+            counts[startPeriod + i] += 1;
+    }
+    double cost = 0;
+    for (const PlanEntry &e : school.planEntries) {
+        const QVector<int> counts = periodCount.value(e.id);
+        if (counts.isEmpty())
+            continue;
+        if (e.morningPeriods > 0) {
+            int have = 0;
+            for (int period = 0; period < morning && period < counts.size(); ++period)
+                have += counts[period];
+            cost += W_PLAN_MORNING * std::max(0, e.morningPeriods - have);
+        }
+        if (e.earlyPeriods > 0) {
+            int miss = 0;
+            for (int period = e.earlyPeriods; period < counts.size(); ++period)
+                miss += counts[period];
+            cost += W_PLAN_EARLY * miss;
+        }
+    }
+    return cost;
 }
 
 const Course *Problem::courseOf(qint64 courseId) const
@@ -686,7 +768,7 @@ QVector<Placement> Problem::candidatePositions(int s) const
     QVector<Placement> out;
     const Session &ss = sessions[s];
     if (ss.fixed) {
-        out.append({ss.fixedSlot, 0});
+        out.append({ss.fixedSlot, ss.fixedHalf});
         return out;
     }
     const int sc = slotCount();
@@ -767,7 +849,7 @@ void Solver::placeFixed()
 {
     for (int s = 0; s < m_p.sessions.size(); ++s) {
         if (m_p.sessions[s].fixed)
-            m_p.apply(s, m_p.sessions[s].fixedSlot, 0);
+            m_p.apply(s, m_p.sessions[s].fixedSlot, m_p.sessions[s].fixedHalf);
     }
 }
 

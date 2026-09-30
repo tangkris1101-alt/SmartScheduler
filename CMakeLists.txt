@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(SmartScheduler
-    VERSION 1.0.32
+    VERSION 1.0.33
     DESCRIPTION "智排课系统 —— 基于 Qt 6 的现代化自动排课系统"
     LANGUAGES CXX
 )

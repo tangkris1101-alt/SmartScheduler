@@ -203,7 +203,8 @@ QVariantList AppController::groupMemberIds(qint64 groupId) const
 }
 
 QVariantMap AppController::batchSetPreassignments(qint64 courseId, const QVariantList &classIds,
-                                                  const QVariantList &slots, int conflictMode)
+                                                  const QVariantList &slots, int conflictMode,
+                                                  int half)
 {
     QVariantMap out{{QStringLiteral("set"), 0},
                     {QStringLiteral("skipped"), 0},
@@ -235,27 +236,31 @@ QVariantMap AppController::batchSetPreassignments(qint64 courseId, const QVarian
                 ++skipped;
                 continue;
             }
-            bool sameExists = false, otherExists = false;
+            // 半周语义：同半周重复 → 跳过；单周与双周可共存（共用格）；整节与任意半周互斥
+            bool sameParity = false, conflicting = false;
             for (const auto &p : m_school.preAssignments) {
                 if (p.classId != cid || p.slotIndex != slot)
                     continue;
-                if (p.courseId == courseId)
-                    sameExists = true;
-                else
-                    otherExists = true;
+                if (p.half == half && p.courseId == courseId) {
+                    sameParity = true;
+                } else if (p.half == 0 || half == 0) {
+                    conflicting = true;
+                }
             }
-            if (sameExists) {
+            if (sameParity) {
                 ++skipped;
                 continue;
             }
-            if (otherExists) {
+            if (conflicting) {
                 if (conflictMode != 1) { // 0=跳过
                     ++skipped;
                     continue;
                 }
                 for (int i = m_school.preAssignments.size() - 1; i >= 0; --i) {
                     const auto &p = m_school.preAssignments[i];
-                    if (p.classId == cid && p.slotIndex == slot)
+                    if (p.classId != cid || p.slotIndex != slot)
+                        continue;
+                    if (p.half == 0 || half == 0) // 只清互斥的那些，保留可共存的半周
                         m_school.removePreAssignment(p.id);
                 }
             }
@@ -263,6 +268,7 @@ QVariantMap AppController::batchSetPreassignments(qint64 courseId, const QVarian
             pre.classId = cid;
             pre.courseId = courseId;
             pre.slotIndex = slot;
+            pre.half = half;
             m_school.addPreAssignment(pre);
             ++set;
             affected.insert(cid);
@@ -925,16 +931,32 @@ QVariantList AppController::preAssignments(qint64 classId) const
         out.append(QVariantMap{{QStringLiteral("courseId"), p.courseId},
                                {QStringLiteral("courseName"),
                                 course ? course->name : QStringLiteral("?")},
-                               {QStringLiteral("slotIndex"), p.slotIndex}});
+                               {QStringLiteral("slotIndex"), p.slotIndex},
+                               {QStringLiteral("half"), p.half}});
     }
     return out;
 }
 
-void AppController::togglePreAssignment(qint64 classId, qint64 courseId, int slot)
+void AppController::togglePreAssignment(qint64 classId, qint64 courseId, int slot, int half)
 {
-    // 同班同 slot 只允许一条预排：已存在则取消，否则写入
+    if (courseId < 0) { // 清除该格全部预排（含单/双周）
+        bool removed = false;
+        for (int i = m_school.preAssignments.size() - 1; i >= 0; --i) {
+            const auto &p = m_school.preAssignments[i];
+            if (p.classId == classId && p.slotIndex == slot) {
+                m_school.removePreAssignment(p.id);
+                removed = true;
+            }
+        }
+        if (removed) {
+            markDirty();
+            Q_EMIT constraintsChanged();
+        }
+        return;
+    }
+    // 同班同 slot 同半周只允许一条预排：命中则取消；不同 half 允许并存（单双周共用一格）
     for (const auto &p : m_school.preAssignments) {
-        if (p.classId == classId && p.slotIndex == slot) {
+        if (p.classId == classId && p.slotIndex == slot && p.half == half) {
             m_school.removePreAssignment(p.id);
             markDirty();
             Q_EMIT constraintsChanged();
@@ -945,6 +967,7 @@ void AppController::togglePreAssignment(qint64 classId, qint64 courseId, int slo
     p.classId = classId;
     p.courseId = courseId;
     p.slotIndex = slot;
+    p.half = half;
     m_school.addPreAssignment(p);
     markDirty();
     Q_EMIT constraintsChanged();

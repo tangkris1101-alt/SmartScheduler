@@ -269,19 +269,19 @@ Item {
                             id: tableFlick
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            contentWidth: 1250
+                            contentWidth: 1350
                             contentHeight: planColumn.implicitHeight
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
 
-                            readonly property var colWidths: [170, 160, 104, 86, 86, 96, 52, 130, 84, 96, 120, 48]
+                            readonly property var colWidths: [170, 160, 104, 86, 86, 96, 96, 52, 130, 84, 96, 120, 48]
                             readonly property var colLabels: [qsTr("课程"), qsTr("任课老师"), qsTr("周节数"),
-                                qsTr("连课次数"), qsTr("连课节数"), qsTr("上午节数"), qsTr("合班"), qsTr("教室"),
-                                qsTr("开课周"), qsTr("结束周"), qsTr("同步课"), ""]
+                                qsTr("连课次数"), qsTr("连课节数"), qsTr("上午节数"), qsTr("前 N 节"), qsTr("合班"),
+                                qsTr("教室"), qsTr("开课周"), qsTr("结束周"), qsTr("同步课"), ""]
 
                             Column {
                                 id: planColumn
-                                width: 1250
+                                width: 1350
 
                                 // 表头
                                 Row {
@@ -475,9 +475,36 @@ Item {
                                                     onActivated: planModel.set(planRow.index, "morningPeriods", index - 1)
                                                 }
                                             }
-                                            // 合班
+                                                                        // 前 N 节（软约束：尽量排在前 N 节内）
                                             Item {
                                                 width: tableFlick.colWidths[6]; height: 50
+                                                AppComboBox {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 4
+                                                    model: {
+                                                        let m = [qsTr("不限")]
+                                                        for (let i = 1; i <= app.periodsPerDay; ++i)
+                                                            m.push(qsTr("前 %1 节").arg(i))
+                                                        return m
+                                                    }
+                                                    currentIndex: {
+                                                        root.rev
+                                                        return planModel.get(planRow.index, "earlyPeriods") + 1
+                                                    }
+                                                    onActivated: planModel.set(planRow.index, "earlyPeriods", index - 1)
+                                                    ToolTip.visible: earlyHover.containsMouse
+                                                    ToolTip.text: qsTr("软约束：这门课尽量排在每天前 N 节（如早读课）")
+                                                    MouseArea {
+                                                        id: earlyHover
+                                                        anchors.fill: parent
+                                                        hoverEnabled: true
+                                                        acceptedButtons: Qt.NoButton
+                                                    }
+                                                }
+                                            }
+                                            // 合班
+                                            Item {
+                                                width: tableFlick.colWidths[7]; height: 50
                                                 AppSwitch {
                                                     anchors.centerIn: parent
                                                     checked: { root.rev; return planModel.get(planRow.index, "isCombined") }
@@ -486,7 +513,7 @@ Item {
                                             }
                                             // 教室
                                             Item {
-                                                width: tableFlick.colWidths[7]; height: 50
+                                                width: tableFlick.colWidths[8]; height: 50
                                                 AppComboBox {
                                                     anchors.fill: parent; anchors.margins: 4
                                                     model: root.roomOptions
@@ -501,7 +528,7 @@ Item {
                                             }
                                             // 开课周
                                             Item {
-                                                width: tableFlick.colWidths[8]; height: 50
+                                                width: tableFlick.colWidths[9]; height: 50
                                                 AppStepper {
                                                     anchors.centerIn: parent
                                                     from: 1; to: app.weeksPerTerm
@@ -511,7 +538,7 @@ Item {
                                             }
                                             // 结束周
                                             Item {
-                                                width: tableFlick.colWidths[9]; height: 50
+                                                width: tableFlick.colWidths[10]; height: 50
                                                 AppComboBox {
                                                     anchors.fill: parent; anchors.margins: 4
                                                     model: {
@@ -529,7 +556,7 @@ Item {
                                             }
                                             // 同步课
                                             Item {
-                                                width: tableFlick.colWidths[10]; height: 50
+                                                width: tableFlick.colWidths[11]; height: 50
                                                 AppComboBox {
                                                     anchors.fill: parent; anchors.margins: 4
                                                     model: {
@@ -550,7 +577,7 @@ Item {
                                             }
                                             // 删除
                                             Item {
-                                                width: tableFlick.colWidths[11]; height: 50
+                                                width: tableFlick.colWidths[12]; height: 50
                                                 Text {
                                                     anchors.centerIn: parent
                                                     text: "✕"

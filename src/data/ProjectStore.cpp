@@ -11,7 +11,7 @@ namespace sched {
 
 namespace {
 
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 // 具名名单公共列（id,name,long_name,short_name,code,priority,remark）的读写辅助
 
 // null QString 会被绑定为 SQL NULL，违反 NOT NULL；统一转为空串
@@ -115,6 +115,16 @@ bool ProjectStore::open(const QString &path)
 // 旧工程升级：按版本逐级补列/改数据
 bool ProjectStore::migrate(int fromVersion)
 {
+    if (fromVersion < 3) {
+        // 预排的单双周（共用格）+ 计划的「前 N 节」软约束
+        const char *alters3[] = {
+            "ALTER TABLE preassign ADD COLUMN half INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE plan_entries ADD COLUMN early_periods INTEGER NOT NULL DEFAULT -1"};
+        for (const char *sql : alters3) {
+            if (!exec(QString::fromLatin1(sql)))
+                return false;
+        }
+    }
     if (fromVersion < 2) {
         // 年级组作息遮罩：mask_days / mask_periods
         const char *alters[] = {
@@ -178,6 +188,7 @@ bool ProjectStore::createSchema()
         " id INTEGER PRIMARY KEY, class_id INTEGER NOT NULL, course_id INTEGER NOT NULL,"
         " weekly_periods REAL NOT NULL DEFAULT 0, chained_count INTEGER NOT NULL DEFAULT 0,"
         " chain_length INTEGER NOT NULL DEFAULT 2, morning_periods INTEGER NOT NULL DEFAULT -1,"
+        " early_periods INTEGER NOT NULL DEFAULT -1,"
         " is_combined INTEGER NOT NULL DEFAULT 0, classroom_id INTEGER NOT NULL DEFAULT -1,"
         " start_week INTEGER NOT NULL DEFAULT 1, end_week INTEGER NOT NULL DEFAULT 0,"
         " sync_course_id INTEGER NOT NULL DEFAULT -1,"
@@ -197,7 +208,7 @@ bool ProjectStore::createSchema()
         " PRIMARY KEY(constraint_id, slot))",
         "CREATE TABLE preassign("
         " id INTEGER PRIMARY KEY, class_id INTEGER NOT NULL, course_id INTEGER NOT NULL,"
-        " slot_index INTEGER NOT NULL)",
+        " slot_index INTEGER NOT NULL, half INTEGER NOT NULL DEFAULT 0)",
         "CREATE TABLE teacher_activities("
         " id INTEGER PRIMARY KEY, teacher_id INTEGER NOT NULL, slot_index INTEGER NOT NULL,"
         " activity_course_id INTEGER NOT NULL DEFAULT -1)",
@@ -379,9 +390,9 @@ bool ProjectStore::save(const School &school)
         QSqlQuery qe(m_db), qt(m_db);
         if (!qe.prepare(QStringLiteral(
                 "INSERT INTO plan_entries(id,class_id,course_id,weekly_periods,chained_count,"
-                " chain_length,morning_periods,is_combined,classroom_id,start_week,end_week,sync_course_id,"
-                " progress_group)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"))
+                " chain_length,morning_periods,early_periods,is_combined,classroom_id,start_week,"
+                " end_week,sync_course_id,progress_group)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"))
             || !qt.prepare(QStringLiteral(
                    "INSERT INTO plan_entry_teachers(entry_id,teacher_id) VALUES(?,?)"))) {
             rollback();
@@ -395,6 +406,7 @@ bool ProjectStore::save(const School &school)
             qe.addBindValue(e.chainedCount);
             qe.addBindValue(e.chainLength);
             qe.addBindValue(e.morningPeriods);
+            qe.addBindValue(e.earlyPeriods);
             qe.addBindValue(e.isCombined ? 1 : 0);
             qe.addBindValue(e.classroomId);
             qe.addBindValue(e.startWeek);
@@ -470,7 +482,7 @@ bool ProjectStore::save(const School &school)
     {
         QSqlQuery q(m_db);
         if (!q.prepare(QStringLiteral(
-                "INSERT INTO preassign(id,class_id,course_id,slot_index) VALUES(?,?,?,?)"))) {
+                "INSERT INTO preassign(id,class_id,course_id,slot_index,half) VALUES(?,?,?,?,?)"))) {
             rollback();
             return fail(q.lastError().text());
         }
@@ -479,6 +491,7 @@ bool ProjectStore::save(const School &school)
             q.addBindValue(p.classId);
             q.addBindValue(p.courseId);
             q.addBindValue(p.slotIndex);
+            q.addBindValue(p.half);
             if (!q.exec()) {
                 rollback();
                 return fail(q.lastError().text());
@@ -657,8 +670,8 @@ bool ProjectStore::load(School *school)
         QSqlQuery qe(m_db);
         if (!qe.exec(QStringLiteral(
                 "SELECT id,class_id,course_id,weekly_periods,chained_count,chain_length,"
-                "morning_periods,is_combined,classroom_id,start_week,end_week,sync_course_id,progress_group"
-                " FROM plan_entries ORDER BY id")))
+                "morning_periods,early_periods,is_combined,classroom_id,start_week,end_week,"
+                "sync_course_id,progress_group FROM plan_entries ORDER BY id")))
             return fail(qe.lastError().text());
         while (qe.next()) {
             PlanEntry e;
@@ -669,12 +682,13 @@ bool ProjectStore::load(School *school)
             e.chainedCount = qe.value(4).toInt();
             e.chainLength = qe.value(5).toInt();
             e.morningPeriods = qe.value(6).toInt();
-            e.isCombined = qe.value(7).toInt() != 0;
-            e.classroomId = qe.value(8).toLongLong();
-            e.startWeek = qe.value(9).toInt();
-            e.endWeek = qe.value(10).toInt();
-            e.syncCourseId = qe.value(11).toLongLong();
-            e.progressGroup = qe.value(12).toInt();
+            e.earlyPeriods = qe.value(7).toInt();
+            e.isCombined = qe.value(8).toInt() != 0;
+            e.classroomId = qe.value(9).toLongLong();
+            e.startWeek = qe.value(10).toInt();
+            e.endWeek = qe.value(11).toInt();
+            e.syncCourseId = qe.value(12).toLongLong();
+            e.progressGroup = qe.value(13).toInt();
             school->planEntries.append(e);
         }
         QSqlQuery qt(m_db);
@@ -732,7 +746,8 @@ bool ProjectStore::load(School *school)
     // preassign
     {
         QSqlQuery q(m_db);
-        if (!q.exec(QStringLiteral("SELECT id,class_id,course_id,slot_index FROM preassign ORDER BY id")))
+        if (!q.exec(QStringLiteral(
+                "SELECT id,class_id,course_id,slot_index,half FROM preassign ORDER BY id")))
             return fail(q.lastError().text());
         while (q.next()) {
             PreAssignment p;
@@ -740,6 +755,7 @@ bool ProjectStore::load(School *school)
             p.classId = q.value(1).toLongLong();
             p.courseId = q.value(2).toLongLong();
             p.slotIndex = q.value(3).toInt();
+            p.half = q.value(4).toInt();
             school->preAssignments.append(p);
         }
     }
