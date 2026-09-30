@@ -1702,6 +1702,10 @@ void AppController::checkUpdate(bool interactive)
     m_downloadedSetup.clear();
     m_latestSha256.clear();
     m_latestSize = 0;
+    m_olderTag.clear();
+    m_olderSetup.clear();
+    m_olderSha256.clear();
+    m_olderSize = 0;
     Q_EMIT updateStatusChanged();
     Q_EMIT updateDlStateChanged();
 
@@ -1725,6 +1729,18 @@ void AppController::checkUpdate(bool interactive)
 void AppController::tryUpdateSource()
 {
     if (m_updateAttempt >= m_updateSources.size()) {
+        // 所有通道都只给出比当前更旧的版本（CDN 缓存尚未刷新，或本地是更新的开发版）：
+        // 等价于「没有可更新的版本」，不是失败
+        if (!m_olderTag.isEmpty()) {
+            m_updateStatus = 2;
+            m_latestVersion = m_olderTag; // 记录已发布的（较旧）版本，供日志与下载链路自检使用
+            m_latestSetup = m_olderSetup;
+            m_latestSha256 = m_olderSha256;
+            m_latestSize = m_olderSize;
+            m_updateMessage = tr("当前已是最新版本。");
+            Q_EMIT updateStatusChanged();
+            return;
+        }
         m_updateStatus = 4;
         m_updateMessage = tr("自动检查失败（已依次尝试镜像加速、GitHub 直连、国内 CDN），"
                              "请检查网络后重试，或打开发布页查看。");
@@ -1777,10 +1793,17 @@ void AppController::tryUpdateSource()
         }
         qWarning("检查更新: 通道 %s 返回 tag=%s（当前 v%s）", qPrintable(url), qPrintable(tag),
                  qPrintable(appVersion()));
-        // 通道/CDN 缓存可能返回旧版本：比当前还旧时继续尝试下一通道，避免错过更新
+        // 通道/CDN 缓存可能返回旧版本：比当前还旧时记下并继续尝试下一通道
+        // （m_latestSetup/Sha256/Size 已指向该通道给出的版本，供下载链路自检使用）
         if (compareVersions(tag, appVersion()) < 0) {
-            qWarning("检查更新: 通道 %s 返回的 v%s 比当前还旧（疑似缓存），尝试下一通道",
+            qWarning("检查更新: 通道 %s 返回的 %s 比当前还旧（疑似缓存），尝试下一通道",
                      qPrintable(url), qPrintable(tag));
+            if (m_olderTag.isEmpty() || compareVersions(tag, m_olderTag) > 0) {
+                m_olderTag = tag;
+                m_olderSetup = m_latestSetup;
+                m_olderSha256 = m_latestSha256;
+                m_olderSize = m_latestSize;
+            }
             tryUpdateSource();
             return;
         }

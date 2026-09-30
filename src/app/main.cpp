@@ -567,7 +567,9 @@ int main(int argc, char *argv[])
     // 回归自检：--smoke=tab 键盘可达性 —— 注入 Tab 键验证焦点能进入工具栏按钮与左侧导航，
     // 并在导航项上按 Space 验证页面切换。0 通过，14=导航未获得焦点，15=Space 切换失败，16=按钮未获得焦点
     if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("tab")) {
-        QTimer::singleShot(1200, &app, [&app]() {
+        QTimer::singleShot(1200, &app, [&appController, &app]() {
+            // 导航项按「已打开项目」显示完整流程，先建一个项目
+            appController.newProject(QStringLiteral("烟测校"), 5, 7, 4, 20);
             QQuickWindow *w = nullptr;
             const auto windows = QGuiApplication::allWindows();
             for (auto *win : windows) {

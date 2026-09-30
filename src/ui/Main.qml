@@ -41,6 +41,35 @@ ApplicationWindow {
         return ""
     }
 
+    // 未打开项目时只保留「首页」与「设置」，其余流程项折叠
+    readonly property var visibleNavModel: {
+        if (app.hasProject)
+            return navModel
+        const out = []
+        for (const item of navModel) {
+            if (item.page === 0 || item.page === 10)
+                out.push(item)
+        }
+        return out
+    }
+    function navIndexForPage(page) {
+        const m = visibleNavModel
+        for (let i = 0; i < m.length; ++i) {
+            if (m[i].page === page)
+                return i
+        }
+        return -1
+    }
+
+    // 关闭项目后如果当前停在被折叠的页面，回到首页
+    Connections {
+        target: app
+        function onProjectChanged() {
+            if (!app.hasProject && win.currentPage !== 0 && win.currentPage !== 10)
+                win.currentPage = 0
+        }
+    }
+
     // 步骤完成判定：用真实数据状态驱动徽标变勾
     function stepDone(page) {
         if (page === 1) return app.classCount > 0
@@ -308,12 +337,26 @@ ApplicationWindow {
                     color: Theme.border
                 }
 
+                // 折叠提示：没打开项目时说明其余入口去哪了
+                Text {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: Theme.spacingM
+                    visible: !app.hasProject
+                    text: qsTr("新建或打开项目后，这里会显示完整流程（名单 → 计划 → 排课 → 课表 → 报告）")
+                    wrapMode: Text.WordWrap
+                    color: Theme.textDisabled
+                    font.pixelSize: Theme.fontCaption
+                }
+
                 ListView {
                     id: nav
                     anchors.fill: parent
                     anchors.margins: Theme.spacingS
-                    model: win.navModel
-                    currentIndex: win.currentPage
+                    anchors.bottomMargin: app.hasProject ? Theme.spacingS : 72
+                    model: win.visibleNavModel
+                    currentIndex: win.navIndexForPage(win.currentPage)
                     clip: true
                     spacing: 2
 

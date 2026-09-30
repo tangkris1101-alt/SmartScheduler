@@ -259,6 +259,10 @@ private:
     int m_updateStatus = 0;
     QString m_latestVersion;
     QString m_updateMessage;
+    QString m_olderTag;         // 所有通道都返回旧版本时记下「已发布的最新版」，避免误报检查失败
+    QString m_olderSetup;       // 与之配套的安装包文件名 / 校验值（通道间版本可能不一致）
+    QString m_olderSha256;
+    qint64 m_olderSize = 0;
     QString m_latestSetup;      // 最新版安装包文件名（镜像下载拼 URL 用）
     QStringList m_updateSources; // 更新检查通道（按国内可达性排序，逐个回退）
     int m_updateAttempt = 0;

@@ -5,7 +5,7 @@
 #define MyAppNameEn "SmartScheduler"
 ; 版本号可被命令行覆盖：iscc /DMyAppVersion=1.0.2 ...
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.30"
+  #define MyAppVersion "1.0.31"
 #endif
 #define MyAppPublisher "SmartScheduler"
 #define MyAppExeName "SmartScheduler.exe"
