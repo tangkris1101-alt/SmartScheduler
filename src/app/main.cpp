@@ -500,6 +500,93 @@ int main(int argc, char *argv[])
         poll->start(300);
     }
 
+    // 回归自检：--smoke=batch 批量操作（预排 / 不排 / 改课时 / 撤销）
+    // 0 通过，41=批量预排异常，42=批量不排或改课时异常，43=撤销异常
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("batch")) {
+        QTimer::singleShot(1200, &app, [&appController, &app]() {
+            appController.createSampleSchool(false); // 不跑引擎，快速校验批量接口
+            auto *school = appController.school();
+            qint64 zixi = -1;
+            for (const auto &c : school->courses) {
+                if (c.name == QStringLiteral("自习"))
+                    zixi = c.id;
+            }
+            if (zixi < 0 || school->classes.isEmpty()) {
+                qWarning("smoke-batch: 示例学校缺少自习课程或班级");
+                app.exit(41);
+                return;
+            }
+            QVariantList classIds;
+            for (const auto &c : school->classes)
+                classIds.append(c.id);
+            const int planTotal = school->planEntries.size();
+
+            // 1) 批量预排：全年级每天第 7 节（0 基 6）→ 6 班 × 5 天 = 30 条
+            QVariantList daySlots;
+            for (int d = 0; d < 5; ++d)
+                daySlots.append(d * 7 + 6);
+            const int preBefore = school->preAssignments.size();
+            const QVariantMap pre = appController.batchSetPreassignments(zixi, classIds, daySlots, 0);
+            if (pre.value(QStringLiteral("set")).toInt() != 30
+                || school->preAssignments.size() != preBefore + 30) {
+                qWarning("smoke-batch: 批量预排异常 set=%d", pre.value(QStringLiteral("set")).toInt());
+                app.exit(41);
+                return;
+            }
+            // 2) 批量清除
+            const QVariantMap clr = appController.batchClearPreassignments(zixi, classIds, daySlots);
+            if (clr.value(QStringLiteral("cleared")).toInt() != 30
+                || school->preAssignments.size() != preBefore) {
+                qWarning("smoke-batch: 批量清除异常 cleared=%d",
+                         clr.value(QStringLiteral("cleared")).toInt());
+                app.exit(41);
+                return;
+            }
+            // 3) 批量不排（老师，前两节）→ 恢复
+            const qint64 teacherId = school->teachers.isEmpty() ? -1 : school->teachers.first().id;
+            const QVariantMap ns = appController.batchSetNoSchedule(2, {teacherId}, {0, 1}, true);
+            if (ns.value(QStringLiteral("set")).toInt() != 2
+                || appController.noScheduleSlots(2, teacherId).size() != 2) {
+                qWarning("smoke-batch: 批量不排异常");
+                app.exit(42);
+                return;
+            }
+            const QVariantMap nsBack = appController.batchSetNoSchedule(2, {teacherId}, {0, 1}, false);
+            if (nsBack.value(QStringLiteral("cleared")).toInt() != 2
+                || !appController.noScheduleSlots(2, teacherId).isEmpty()) {
+                qWarning("smoke-batch: 批量恢复不排异常");
+                app.exit(42);
+                return;
+            }
+            // 4) 批量改课时：自习 → 5 节/周
+            const QVariantMap wp = appController.batchSetWeeklyPeriods(zixi, classIds, 5);
+            if (wp.value(QStringLiteral("updated")).toInt() != classIds.size()) {
+                qWarning("smoke-batch: 批量改课时异常 updated=%d",
+                         wp.value(QStringLiteral("updated")).toInt());
+                app.exit(42);
+                return;
+            }
+            // 5) 撤销本次 → 自习周节数还原
+            if (!appController.undoLastBatch()) {
+                qWarning("smoke-batch: 撤销失败");
+                app.exit(43);
+                return;
+            }
+            int zixiCount = 0;
+            for (const auto &e : school->planEntries) {
+                if (e.courseId == zixi)
+                    ++zixiCount;
+            }
+            if (school->planEntries.size() != planTotal || zixiCount == 0) {
+                qWarning("smoke-batch: 撤销后计划条目异常");
+                app.exit(43);
+                return;
+            }
+            qWarning("smoke-batch: 预排 30 条/清除/不排/改课时/撤销 全部通过");
+            app.exit(0);
+        });
+    }
+
     // 回归自检：--smoke=plan-empty 空教学计划状态下，空状态提示应居中于卡片
     // 0 通过，11=页面/组件未找到，12=空状态未居中，13=截图保存失败
     if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("plan-empty")) {

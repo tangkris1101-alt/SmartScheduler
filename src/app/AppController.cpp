@@ -146,6 +146,305 @@ QVariantMap AppController::addClassesWithAutoGroup(const QStringList &names)
     return out;
 }
 
+// ==================== 批量操作（一次设置/清除 + 单级撤销）====================
+
+namespace {
+// 按 (实体类型, 实体 id) 取出不排约束（无则 nullptr）
+sched::NoScheduleConstraint *noScheduleFor(sched::School &school, int entityType, qint64 entityId)
+{
+    const auto type = static_cast<sched::NoScheduleConstraint::EntityType>(entityType);
+    for (auto &c : school.noScheduleConstraints) {
+        if (c.entityType == type && c.entityId == entityId)
+            return &c;
+    }
+    return nullptr;
+}
+} // namespace
+
+void AppController::makeBatchBackup(const QString &label)
+{
+    m_batchBackup.preAssignments = m_school.preAssignments;
+    m_batchBackup.noSchedule = m_school.noScheduleConstraints;
+    m_batchBackup.planEntries = m_school.planEntries;
+    m_batchBackup.label = label;
+    m_hasBatchBackup = true;
+}
+
+void AppController::discardBatchBackup()
+{
+    m_batchBackup = BatchBackup();
+    m_hasBatchBackup = false;
+}
+
+bool AppController::undoLastBatch()
+{
+    if (!m_hasBatchBackup)
+        return false;
+    cancelScheduler();
+    m_school.preAssignments = m_batchBackup.preAssignments;
+    m_school.noScheduleConstraints = m_batchBackup.noSchedule;
+    m_school.planEntries = m_batchBackup.planEntries;
+    discardBatchBackup();
+    markDirty();
+    Q_EMIT projectChanged();
+    Q_EMIT constraintsChanged();
+    return true;
+}
+
+QVariantList AppController::groupMemberIds(qint64 groupId) const
+{
+    QVariantList out;
+    const sched::Group *g = m_school.findGroup(groupId);
+    if (!g)
+        return out;
+    for (qint64 id : g->memberIds)
+        out.append(id);
+    return out;
+}
+
+QVariantMap AppController::batchSetPreassignments(qint64 courseId, const QVariantList &classIds,
+                                                  const QVariantList &slots, int conflictMode)
+{
+    QVariantMap out{{QStringLiteral("set"), 0},
+                    {QStringLiteral("skipped"), 0},
+                    {QStringLiteral("occupied"), 0},
+                    {QStringLiteral("affected"), 0}};
+    if (!m_hasProject || courseId < 0 || slots.isEmpty())
+        return out;
+    cancelScheduler();
+    makeBatchBackup(tr("批量预排"));
+
+    int set = 0, skipped = 0, occupied = 0;
+    QSet<qint64> affected;
+    for (const QVariant &cv : classIds) {
+        const qint64 cid = cv.toLongLong();
+        if (!m_school.findClass(cid))
+            continue;
+        bool inPlan = false;
+        for (const auto &e : m_school.planEntries) {
+            if (e.classId == cid && e.courseId == courseId) {
+                inPlan = true;
+                break;
+            }
+        }
+        for (const QVariant &sv : slots) {
+            const int slot = sv.toInt();
+            if (!m_school.timeConfig.isValidSlot(slot))
+                continue;
+            if (!inPlan) {
+                ++skipped;
+                continue;
+            }
+            bool sameExists = false, otherExists = false;
+            for (const auto &p : m_school.preAssignments) {
+                if (p.classId != cid || p.slotIndex != slot)
+                    continue;
+                if (p.courseId == courseId)
+                    sameExists = true;
+                else
+                    otherExists = true;
+            }
+            if (sameExists) {
+                ++skipped;
+                continue;
+            }
+            if (otherExists) {
+                if (conflictMode != 1) { // 0=跳过
+                    ++skipped;
+                    continue;
+                }
+                for (int i = m_school.preAssignments.size() - 1; i >= 0; --i) {
+                    const auto &p = m_school.preAssignments[i];
+                    if (p.classId == cid && p.slotIndex == slot)
+                        m_school.removePreAssignment(p.id);
+                }
+            }
+            sched::PreAssignment pre;
+            pre.classId = cid;
+            pre.courseId = courseId;
+            pre.slotIndex = slot;
+            m_school.addPreAssignment(pre);
+            ++set;
+            affected.insert(cid);
+            for (const auto &a : m_school.schedule.assignments) {
+                if (a.classId == cid && a.slotIndex == slot) {
+                    ++occupied; // 当前课表该格已有课：下次排课会被覆盖，给用户提示
+                    break;
+                }
+            }
+        }
+    }
+    out[QStringLiteral("skipped")] = skipped;
+    out[QStringLiteral("occupied")] = occupied;
+    out[QStringLiteral("affected")] = affected.size();
+    if (set == 0) {
+        discardBatchBackup();
+        return out;
+    }
+    out[QStringLiteral("set")] = set;
+    markDirty();
+    Q_EMIT constraintsChanged();
+    return out;
+}
+
+QVariantMap AppController::batchClearPreassignments(qint64 courseId, const QVariantList &classIds,
+                                                    const QVariantList &slots)
+{
+    QVariantMap out{{QStringLiteral("cleared"), 0}, {QStringLiteral("affected"), 0}};
+    if (!m_hasProject || slots.isEmpty())
+        return out;
+    cancelScheduler();
+    makeBatchBackup(tr("批量清除预排"));
+
+    QSet<qint64> classSet, slotSet;
+    for (const QVariant &v : classIds)
+        classSet.insert(v.toLongLong());
+    for (const QVariant &v : slots)
+        slotSet.insert(v.toInt());
+
+    int cleared = 0;
+    QSet<qint64> affected;
+    for (int i = m_school.preAssignments.size() - 1; i >= 0; --i) {
+        const auto &p = m_school.preAssignments[i];
+        if (!classSet.isEmpty() && !classSet.contains(p.classId))
+            continue;
+        if (!slotSet.contains(p.slotIndex))
+            continue;
+        if (courseId >= 0 && p.courseId != courseId)
+            continue;
+        affected.insert(p.classId);
+        m_school.removePreAssignment(p.id);
+        ++cleared;
+    }
+    if (cleared == 0) {
+        discardBatchBackup();
+        return out;
+    }
+    out[QStringLiteral("cleared")] = cleared;
+    out[QStringLiteral("affected")] = affected.size();
+    markDirty();
+    Q_EMIT constraintsChanged();
+    return out;
+}
+
+QVariantMap AppController::batchSetNoSchedule(int entityType, const QVariantList &ids,
+                                              const QVariantList &slots, bool forbidden)
+{
+    QVariantMap out{{QStringLiteral("set"), 0},
+                    {QStringLiteral("cleared"), 0},
+                    {QStringLiteral("affected"), 0}};
+    if (!m_hasProject || ids.isEmpty() || slots.isEmpty())
+        return out;
+    cancelScheduler();
+    makeBatchBackup(forbidden ? tr("批量不排") : tr("批量恢复不排"));
+
+    auto entityExists = [this, entityType](qint64 id) {
+        using ET = sched::NoScheduleConstraint::EntityType;
+        switch (static_cast<ET>(entityType)) {
+        case ET::Class:
+            return m_school.findClass(id) != nullptr;
+        case ET::Course:
+            return m_school.findCourse(id) != nullptr;
+        case ET::Teacher:
+            return m_school.findTeacher(id) != nullptr;
+        case ET::Classroom:
+            return m_school.findClassroom(id) != nullptr;
+        }
+        return false;
+    };
+
+    int set = 0, cleared = 0;
+    QSet<qint64> affected;
+    for (const QVariant &iv : ids) {
+        const qint64 id = iv.toLongLong();
+        if (!entityExists(id))
+            continue;
+        for (const QVariant &sv : slots) {
+            const int slot = sv.toInt();
+            if (!m_school.timeConfig.isValidSlot(slot))
+                continue;
+            sched::NoScheduleConstraint *c = noScheduleFor(m_school, entityType, id);
+            if (forbidden) {
+                if (!c) {
+                    sched::NoScheduleConstraint nc;
+                    nc.entityType = static_cast<sched::NoScheduleConstraint::EntityType>(entityType);
+                    nc.entityId = id;
+                    m_school.addNoScheduleConstraint(nc);
+                    c = &m_school.noScheduleConstraints.last(); // add 追加在末尾
+                }
+                if (!c->slots.contains(slot)) {
+                    c->slots.insert(slot);
+                    ++set;
+                    affected.insert(id);
+                }
+            } else {
+                if (!c || !c->slots.contains(slot))
+                    continue;
+                c->slots.remove(slot);
+                ++cleared;
+                affected.insert(id);
+                if (c->slots.isEmpty()) {
+                    m_school.removeNoScheduleConstraint(c->id);
+                    c = nullptr;
+                }
+            }
+        }
+    }
+    if (set == 0 && cleared == 0) {
+        discardBatchBackup();
+        return out;
+    }
+    out[QStringLiteral("set")] = set;
+    out[QStringLiteral("cleared")] = cleared;
+    out[QStringLiteral("affected")] = affected.size();
+    markDirty();
+    Q_EMIT constraintsChanged();
+    return out;
+}
+
+QVariantMap AppController::batchSetWeeklyPeriods(qint64 courseId, const QVariantList &classIds,
+                                                 double weeklyPeriods)
+{
+    QVariantMap out{{QStringLiteral("updated"), 0},
+                    {QStringLiteral("missing"), 0},
+                    {QStringLiteral("affected"), 0}};
+    if (!m_hasProject || courseId < 0)
+        return out;
+    cancelScheduler();
+    makeBatchBackup(tr("批量改课时"));
+
+    int updated = 0, missing = 0;
+    QSet<qint64> affected;
+    for (const QVariant &cv : classIds) {
+        const qint64 cid = cv.toLongLong();
+        if (!m_school.findClass(cid))
+            continue;
+        bool found = false;
+        for (auto &e : m_school.planEntries) {
+            if (e.classId != cid || e.courseId != courseId)
+                continue;
+            found = true;
+            if (!qFuzzyCompare(e.weeklyPeriods + 1.0, weeklyPeriods + 1.0)) {
+                e.weeklyPeriods = weeklyPeriods;
+                ++updated;
+                affected.insert(cid);
+            }
+        }
+        if (!found)
+            ++missing;
+    }
+    if (updated == 0) {
+        discardBatchBackup();
+        return out;
+    }
+    out[QStringLiteral("updated")] = updated;
+    out[QStringLiteral("missing")] = missing;
+    out[QStringLiteral("affected")] = affected.size();
+    markDirty();
+    Q_EMIT projectChanged();
+    return out;
+}
+
 void AppController::removeRecentFile(const QString &path)
 {
     QStringList files = recentFiles();

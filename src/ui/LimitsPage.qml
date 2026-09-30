@@ -207,6 +207,12 @@ Item {
                         visible: root.mode === 0
                         onClicked: groupMaskDialog.open()
                     }
+                    AppButton {
+                        text: qsTr("⊞ 批量设置…")
+                        visible: root.mode === 0
+                        variant: "primary"
+                        onClicked: batchNoScheduleDialog.openDialog()
+                    }
                     Item { Layout.fillWidth: true }
                     Text {
                         text: qsTr("点击单元格切换；点星期/节次表头可整列/整行切换")
@@ -346,6 +352,12 @@ Item {
                         color: Theme.textDisabled
                         font.pixelSize: Theme.fontCaption
                     }
+                    AppButton {
+                        text: qsTr("⊞ 批量预排…")
+                        visible: root.preMode === 0
+                        variant: "primary"
+                        onClicked: batchPreassignDialog.openDialog()
+                    }
                 }
 
                 AppCard {
@@ -407,6 +419,18 @@ Item {
                 }
             }
         }
+    }
+
+    // 批量固定预排 / 批量不排时间
+    BatchPreassignDialog {
+        id: batchPreassignDialog
+        parent: Overlay.overlay
+        onApplied: root.refresh()
+    }
+    BatchNoScheduleDialog {
+        id: batchNoScheduleDialog
+        parent: Overlay.overlay
+        onApplied: root.refresh()
     }
 
     // 年级组作息遮罩：把「每周天数 / 每天节数」范围外的槽位批量设为组内班级的不排

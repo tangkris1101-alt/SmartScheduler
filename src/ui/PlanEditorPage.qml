@@ -256,6 +256,11 @@ Item {
                                 enabled: planModel.count > 0
                                 onClicked: copyDialog.open()
                             }
+                            AppButton {
+                                text: qsTr("⊞ 批量改课时…")
+                                enabled: app.courseCount > 0 && app.classCount > 0
+                                onClicked: batchWeeklyDialog.open()
+                            }
                             Item { Layout.fillWidth: true }
                         }
 
@@ -1166,6 +1171,229 @@ Item {
                         }
                         copyDialog.resultText = qsTr("已复制 %1 条").arg(total)
                     }
+                }
+            }
+        }
+    }
+
+    // 批量改课时：把某门课在指定范围班级中的周节数一次改到位
+    Popup {
+        id: batchWeeklyDialog
+        parent: Overlay.overlay
+        modal: true
+        anchors.centerIn: parent
+        width: 560
+        padding: 0
+
+        property int scopeMode: 0 // 0 全部班级 1 年级组 2 手选
+        property int groupIndex: 0
+        property var checkedClasses: ({})
+        property string resultText: ""
+        property bool undoVisible: false
+
+        readonly property var gradeOptions: {
+            let out = []
+            for (let i = 0; i < groupModel.count; ++i) {
+                if (groupModel.get(i, "type") === 0)
+                    out.push({ "id": groupModel.get(i, "id"),
+                               "name": groupModel.get(i, "name"),
+                               "memberCount": groupModel.get(i, "memberCount") })
+            }
+            return out
+        }
+
+        function targetClassIds() {
+            let ids = []
+            if (scopeMode === 0) {
+                for (let i = 0; i < classModel.count; ++i)
+                    ids.push(classModel.get(i, "id"))
+            } else if (scopeMode === 1) {
+                const g = gradeOptions[groupIndex]
+                if (g)
+                    ids = app.groupMemberIds(g.id)
+            } else {
+                for (const key of Object.keys(checkedClasses)) {
+                    if (checkedClasses[key] === true)
+                        ids.push(Number(key))
+                }
+            }
+            return ids
+        }
+        function apply() {
+            if (batchCourseCombo.currentIndex < 0)
+                return
+            const courseId = courseModel.get(batchCourseCombo.currentIndex, "id")
+            const r = app.batchSetWeeklyPeriods(courseId, targetClassIds(), batchPeriods.value)
+            resultText = qsTr("已更新 %1 个班的周节数；%2 个班没有这门课（未改动）")
+                    .arg(r.updated).arg(r.missing)
+            undoVisible = app.canUndoBatch()
+        }
+
+        background: Rectangle {
+            radius: Theme.radiusL
+            color: Theme.surface
+            border.color: Theme.border
+        }
+        Overlay.modal: Rectangle {
+            color: Theme.dark ? Qt.rgba(0, 0, 0, 0.55) : Qt.rgba(15, 23, 42, 0.28)
+        }
+        onOpened: {
+            scopeMode = 0
+            groupIndex = 0
+            checkedClasses = ({})
+            resultText = ""
+            undoVisible = false
+            batchPeriods.value = 5
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.spacingS
+
+            Text {
+                Layout.topMargin: Theme.spacingL
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                text: qsTr("批量改课时")
+                font.pixelSize: Theme.fontTitle
+                font.bold: true
+                color: Theme.text
+            }
+            Text {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                text: qsTr("把某门课的周节数在多个班里一次改到位（只改已有该课的计划条目，没有的班跳过）。")
+                font.pixelSize: Theme.fontCaption
+                color: Theme.textSecondary
+                wrapMode: Text.WordWrap
+            }
+
+            GridLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: Theme.spacingM
+                rowSpacing: Theme.spacingS
+
+                Text { text: qsTr("课程"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                AppComboBox {
+                    id: batchCourseCombo
+                    Layout.fillWidth: true
+                    model: {
+                        let names = []
+                        for (let i = 0; i < courseModel.count; ++i)
+                            names.push(courseModel.get(i, "name"))
+                        return names
+                    }
+                }
+                Text { text: qsTr("新的周节数"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                AppStepper {
+                    id: batchPeriods
+                    from: 0
+                    to: 40
+                    value: 5
+                    suffix: qsTr(" 节/周")
+                }
+            }
+
+            RowLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                spacing: Theme.spacingS
+                Text { text: qsTr("范围"); color: Theme.text; font.pixelSize: Theme.fontBody }
+                AppTabs {
+                    model: [qsTr("全部班级"), qsTr("年级组"), qsTr("手选班级")]
+                    currentIndex: batchWeeklyDialog.scopeMode
+                    onTabClicked: function (index) { batchWeeklyDialog.scopeMode = index }
+                }
+                AppComboBox {
+                    Layout.preferredWidth: 200
+                    visible: batchWeeklyDialog.scopeMode === 1
+                    model: {
+                        let names = []
+                        for (const g of batchWeeklyDialog.gradeOptions)
+                            names.push(qsTr("%1（%2 个班）").arg(g.name).arg(g.memberCount))
+                        return names
+                    }
+                    currentIndex: batchWeeklyDialog.groupIndex
+                    onActivated: batchWeeklyDialog.groupIndex = index
+                }
+                Item { Layout.fillWidth: true }
+            }
+
+            Rectangle {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? 140 : 0
+                visible: batchWeeklyDialog.scopeMode === 2
+                radius: Theme.radiusS
+                color: Theme.surfaceAlt
+                border.color: Theme.border
+                ListView {
+                    anchors.fill: parent
+                    anchors.margins: 4
+                    clip: true
+                    model: classModel
+                    spacing: 2
+                    delegate: RowLayout {
+                        required property int index
+                        width: ListView.view.width
+                        height: 30
+                        AppSwitch {
+                            checked: batchWeeklyDialog.checkedClasses[classModel.get(index, "id")] === true
+                            onToggled: function (isChecked) {
+                                const m = batchWeeklyDialog.checkedClasses
+                                m[classModel.get(index, "id")] = isChecked
+                                batchWeeklyDialog.checkedClasses = m
+                            }
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: String(classModel.get(index, "name") ?? "")
+                            color: Theme.text
+                            font.pixelSize: Theme.fontBody
+                        }
+                    }
+                }
+            }
+
+            Text {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                visible: batchWeeklyDialog.resultText !== ""
+                text: batchWeeklyDialog.resultText
+                color: Theme.success
+                font.pixelSize: Theme.fontCaption
+                wrapMode: Text.WordWrap
+            }
+
+            RowLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.bottomMargin: Theme.spacingL
+                Layout.topMargin: Theme.spacingS
+                Layout.fillWidth: true
+                spacing: Theme.spacingS
+                AppButton {
+                    visible: batchWeeklyDialog.undoVisible
+                    text: qsTr("撤销本次")
+                    onClicked: {
+                        if (app.undoLastBatch()) {
+                            batchWeeklyDialog.resultText = qsTr("已撤销上一次批量操作")
+                            batchWeeklyDialog.undoVisible = false
+                        }
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                AppButton { text: qsTr("关闭"); onClicked: batchWeeklyDialog.close() }
+                AppButton {
+                    text: qsTr("应用到 %1 个班").arg(batchWeeklyDialog.targetClassIds().length)
+                    variant: "primary"
+                    onClicked: batchWeeklyDialog.apply()
                 }
             }
         }

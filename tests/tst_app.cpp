@@ -41,6 +41,7 @@ private Q_SLOTS:
     void qualityReport();
     void recentFilesOps();
     void batchClassesWithAutoGroup();
+    void batchOps();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -727,6 +728,102 @@ void TestApp::batchClassesWithAutoGroup()
                  .toInt(),
              0);
     QCOMPARE(app.classCount(), 6);
+}
+
+void TestApp::batchOps()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    sched::Course zixi;
+    zixi.name = QStringLiteral("自习");
+    const qint64 course = app.school()->addCourse(zixi);
+    sched::Group g;
+    g.type = sched::Group::Type::TeacherGroup;
+    g.name = QStringLiteral("数学组");
+    const qint64 gid = app.school()->addGroup(g);
+    app.school()->findGroup(gid)->memberIds = {ids.tZhang};
+
+    const auto addPlan = [&](qint64 cid) {
+        sched::PlanEntry e;
+        e.classId = cid;
+        e.courseId = course;
+        e.teacherIds = {ids.tZhang};
+        e.weeklyPeriods = 5;
+        app.school()->addPlanEntry(e);
+    };
+    addPlan(ids.class1);
+    addPlan(ids.class2);
+    // 语文也在 1 班计划内（后面用它制造"该格已被别的课钉住"的冲突）
+    sched::PlanEntry ywPlan;
+    ywPlan.classId = ids.class1;
+    ywPlan.courseId = ids.yuwen;
+    ywPlan.teacherIds = {ids.tWang};
+    ywPlan.weeklyPeriods = 5;
+    app.school()->addPlanEntry(ywPlan);
+
+    // 批量预排：2 班 × 5 格 = 10 条
+    const QVariantMap pre = app.batchSetPreassignments(course, {ids.class1, ids.class2},
+                                                       {0, 1, 2, 3, 4}, 0);
+    QCOMPARE(pre.value(QStringLiteral("set")).toInt(), 10);
+    QCOMPARE(pre.value(QStringLiteral("affected")).toInt(), 2);
+    QCOMPARE(app.school()->preAssignments.size(), 10);
+
+    // 冲突：先给 1 班第 5 格钉别的课，再批量钉自习 → 跳过 1 格
+    app.togglePreAssignment(ids.class1, ids.yuwen, 5);
+    const QVariantMap pre2 = app.batchSetPreassignments(course, {ids.class1}, {5}, 0);
+    QCOMPARE(pre2.value(QStringLiteral("set")).toInt(), 0);
+    QCOMPARE(pre2.value(QStringLiteral("skipped")).toInt(), 1);
+    // 覆盖模式：替换掉原有预排
+    const QVariantMap pre3 = app.batchSetPreassignments(course, {ids.class1}, {5}, 1);
+    QCOMPARE(pre3.value(QStringLiteral("set")).toInt(), 1);
+    QCOMPARE(app.preAssignments(ids.class1).size(), 6); // 5 格 + 覆盖后的第 5 格
+
+    // 撤销：回到「10 条 + 1 条别的课」的状态
+    QVERIFY(app.canUndoBatch());
+    QVERIFY(app.undoLastBatch());
+    QCOMPARE(app.school()->preAssignments.size(), 11);
+    QVERIFY(!app.canUndoBatch());
+
+    // 批量清除：清掉 2 班全部自习预排
+    const QVariantMap clr = app.batchClearPreassignments(course, {ids.class2}, {0, 1, 2, 3, 4});
+    QCOMPARE(clr.value(QStringLiteral("cleared")).toInt(), 5);
+    // 撤销后恢复
+    QVERIFY(app.undoLastBatch());
+    QCOMPARE(app.school()->preAssignments.size(), 11);
+
+    // 批量不排（老师）：3 格禁排 → 恢复
+    const QVariantMap ns = app.batchSetNoSchedule(2, {ids.tZhang}, {0, 1, 2}, true);
+    QCOMPARE(ns.value(QStringLiteral("set")).toInt(), 3);
+    QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 3);
+    const QVariantMap ns2 = app.batchSetNoSchedule(2, {ids.tZhang}, {1}, false);
+    QCOMPARE(ns2.value(QStringLiteral("cleared")).toInt(), 1);
+    QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 2);
+    QVERIFY(app.undoLastBatch());
+    QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 3);
+
+    // 组成员（按教研组批量勾选的数据来源）
+    QCOMPARE(app.groupMemberIds(gid), QVariantList{ids.tZhang});
+    QVERIFY(app.groupMemberIds(-1).isEmpty());
+
+    // 批量改课时：命中 2 条；再改一个没有该课的班级 → missing 1
+    const QVariantMap wp = app.batchSetWeeklyPeriods(course, {ids.class1, ids.class2}, 3);
+    QCOMPARE(wp.value(QStringLiteral("updated")).toInt(), 2);
+    for (const auto &e : app.school()->planEntries) {
+        if (e.courseId == course)
+            QCOMPARE(e.weeklyPeriods, 3.0);
+    }
+    const QVariantMap wp2 = app.batchSetWeeklyPeriods(course, {ids.class1, ids.class2}, 5);
+    QCOMPARE(wp2.value(QStringLiteral("updated")).toInt(), 2);
+    QVERIFY(app.undoLastBatch());
+    for (const auto &e : app.school()->planEntries) {
+        if (e.courseId == course)
+            QCOMPARE(e.weeklyPeriods, 3.0);
+    }
+
+    // 无变化时不占用撤销位
+    const QVariantMap wp3 = app.batchSetWeeklyPeriods(course, {ids.class1, ids.class2}, 3);
+    QCOMPARE(wp3.value(QStringLiteral("updated")).toInt(), 0);
+    QVERIFY(!app.canUndoBatch());
 }
 
 void TestApp::schedulerBridge()

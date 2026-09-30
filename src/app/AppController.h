@@ -100,6 +100,24 @@ public:
     // 批量建班并按名称前缀自动建/并入年级组（"高一1班"→"高一年级"）
     // 返回 {created, groups:[{name, memberCount}]}；名称不含数字时不建组
     Q_INVOKABLE QVariantMap addClassesWithAutoGroup(const QStringList &names);
+
+    // ---- 批量操作（一次设置/清除，支持整体撤销；对象集合由界面传入）----
+    Q_INVOKABLE QVariantList groupMemberIds(qint64 groupId) const; // 组成员 id（按教研组批量勾选用）
+    // 批量固定预排：conflictMode 0=跳过已有 1=覆盖。返回 {set, skipped, occupied, affected}
+    Q_INVOKABLE QVariantMap batchSetPreassignments(qint64 courseId, const QVariantList &classIds,
+                                                   const QVariantList &slots, int conflictMode);
+    // 批量清除预排：courseId < 0 表示不限课程。返回 {cleared, affected}
+    Q_INVOKABLE QVariantMap batchClearPreassignments(qint64 courseId, const QVariantList &classIds,
+                                                     const QVariantList &slots);
+    // 批量不排时间：forbidden=true 禁排 / false 恢复。返回 {set, cleared, affected}
+    Q_INVOKABLE QVariantMap batchSetNoSchedule(int entityType, const QVariantList &ids,
+                                               const QVariantList &slots, bool forbidden);
+    // 批量改周节数（只改该课程已存在的计划条目）。返回 {updated, missing, affected}
+    Q_INVOKABLE QVariantMap batchSetWeeklyPeriods(qint64 courseId, const QVariantList &classIds,
+                                                  double weeklyPeriods);
+    Q_INVOKABLE bool canUndoBatch() const { return m_hasBatchBackup; }
+    Q_INVOKABLE QString lastBatchLabel() const { return m_batchBackup.label; }
+    Q_INVOKABLE bool undoLastBatch(); // 撤销上一次批量操作（单级）
     Q_INVOKABLE bool openProject(const QString &pathOrUrl);
     Q_INVOKABLE bool saveProject();    // 无路径时返回 false（QML 弹出另存对话框）
     Q_INVOKABLE bool saveProjectAs(const QString &pathOrUrl);
@@ -229,6 +247,18 @@ private:
     static QString toLocalPath(const QString &pathOrUrl);
     bool saveToPath(const QString &path);
     void addRecentFile(const QString &path);
+
+    // 批量操作前的单级快照（供「撤销本次」）
+    struct BatchBackup {
+        QVector<sched::PreAssignment> preAssignments;
+        QVector<sched::NoScheduleConstraint> noSchedule;
+        QVector<sched::PlanEntry> planEntries;
+        QString label;
+    };
+    void makeBatchBackup(const QString &label);
+    void discardBatchBackup();
+    BatchBackup m_batchBackup;
+    bool m_hasBatchBackup = false;
 
     sched::School m_school;
     sched::ProjectStore m_store;

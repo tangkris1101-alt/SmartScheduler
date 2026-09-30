@@ -28,6 +28,9 @@ qt_add_qml_module(SmartScheduler
         ui/AppTextField.qml
         ui/PlaceholderPage.qml
         ui/RosterCell.qml
+        ui/SlotPicker.qml
+        ui/BatchPreassignDialog.qml
+        ui/BatchNoScheduleDialog.qml
         ui/TimetableGrid.qml
         ui/NewProjectDialog.qml
         ui/HomePage.qml
