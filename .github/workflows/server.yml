@@ -1,0 +1,79 @@
+name: AI Relay CI/CD
+
+# 中继服务：server/ 目录的改动会先跑离线自测，通过后自动部署到
+# api.class.feimsg.cn（rsync → npm ci → pm2 reload → 健康检查）
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+  pull_request:
+    paths:
+      - 'server/**'
+      - '.github/workflows/server.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ai-relay-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: 离线自测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 安装依赖
+        working-directory: server
+        run: npm ci --no-audit --no-fund
+      - name: 自测（内置假上游，不访问真实模型）
+        working-directory: server
+        run: node test/smoke.mjs
+
+  deploy:
+    name: 部署到 api.class.feimsg.cn
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.SERVER_PORT }}" "${{ secrets.SERVER_HOST }}" \
+            >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 同步代码（保留服务端 .env 与日志）
+        run: |
+          rsync -az --delete \
+            --exclude node_modules --exclude .env --exclude logs \
+            -e "ssh -p ${{ secrets.SERVER_PORT }} -i ~/.ssh/deploy_key" \
+            server/ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/www/wwwroot/api.class.feimsg.cn/app/"
+
+      - name: 安装依赖并热重载
+        run: |
+          ssh -p "${{ secrets.SERVER_PORT }}" -i ~/.ssh/deploy_key \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" '
+            set -e
+            cd /www/wwwroot/api.class.feimsg.cn/app
+            npm ci --omit=dev --no-audit --no-fund
+            chown -R www:www .
+            if pm2 describe ai-relay >/dev/null 2>&1; then
+              pm2 reload ai-relay --update-env
+            else
+              pm2 start ecosystem.config.cjs
+            fi
+            pm2 save >/dev/null
+            sleep 2
+            curl -fsS http://127.0.0.1:8791/v1/health
+          '
+
+      - name: 公网健康检查
+        run: curl -fsS --max-time 20 https://api.class.feimsg.cn/v1/health
