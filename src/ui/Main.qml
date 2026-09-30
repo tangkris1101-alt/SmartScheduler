@@ -84,9 +84,16 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         nameFilters: [qsTr("SmartScheduler 项目 (*.spk)")]
         property bool quitAfterSave: false
+        property bool installAfterSave: false
         onAccepted: {
-            if (app.saveProjectAs(selectedFile.toString()) && quitAfterSave)
-                Qt.quit()
+            if (app.saveProjectAs(selectedFile.toString())) {
+                if (installAfterSave) {
+                    installAfterSave = false
+                    app.installUpdate()
+                } else if (quitAfterSave) {
+                    Qt.quit()
+                }
+            }
         }
     }
 
@@ -109,6 +116,26 @@ ApplicationWindow {
         onThirdAction: {
             win.skipCloseGuard = true // 用户明确放弃修改，放行关闭事件
             Qt.quit()
+        }
+    }
+
+    // 顶栏「新版本已就绪」的安装确认：先保存未保存的项目，再静默安装并退出
+    AppConfirmDialog {
+        id: installConfirmDialog
+        parent: Overlay.overlay
+        title: qsTr("安装新版本 %1").arg(app.latestVersion)
+        message: qsTr("将关闭智排课系统并自动安装 %1，完成后会自动启动新版本。")
+                     .arg(app.latestVersion)
+                 + (app.projectDirty ? qsTr("\n当前项目有未保存更改，将先为你保存。") : "")
+        okText: qsTr("开始安装")
+        onAccepted: {
+            if (app.projectDirty && !app.saveProject()) {
+                saveAsDialog.quitAfterSave = false
+                saveAsDialog.installAfterSave = true
+                saveAsDialog.open()
+            } else {
+                app.installUpdate()
+            }
         }
     }
 
@@ -219,6 +246,14 @@ ApplicationWindow {
                         color: Theme.primary
                         font.pixelSize: Theme.fontCaption
                     }
+                }
+
+                // 新版本已就绪：一键安装（唯一需要用户确认的环节）
+                AppButton {
+                    visible: app.updateReady
+                    variant: "primary"
+                    text: qsTr("🎉 新版本 %1 已就绪，安装").arg(app.latestVersion)
+                    onClicked: installConfirmDialog.open()
                 }
 
                 AppButton {

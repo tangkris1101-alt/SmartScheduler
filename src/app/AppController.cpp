@@ -32,6 +32,16 @@ constexpr int kMaxRecentFiles = 8;
 AppController::AppController(QObject *parent)
     : QObject(parent)
 {
+    // 自动更新：启动后先查一次，之后每 5 分钟静默复查；发现新版本立即下载，
+    // 只有「安装」需要用户确认（下载就绪后由界面提示）。
+    // 单元测试用的是另一套 applicationName，跳过网络轮询保持测试确定性。
+    if (QCoreApplication::applicationName() != QLatin1String("SmartScheduler"))
+        return;
+    QTimer::singleShot(3000, this, [this]() { checkUpdateSilently(); });
+    auto *updateTimer = new QTimer(this);
+    updateTimer->setInterval(5 * 60 * 1000);
+    connect(updateTimer, &QTimer::timeout, this, [this]() { checkUpdateSilently(); });
+    updateTimer->start();
 }
 
 QString AppController::toLocalPath(const QString &pathOrUrl)
@@ -1559,11 +1569,24 @@ int AppController::compareVersions(const QString &a, const QString &b)
 
 void AppController::checkUpdate()
 {
-    if (m_updateStatus == 1) // 防止重复点击
+    checkUpdate(true); // 手动点击：显示「检查中」状态
+}
+
+void AppController::checkUpdateSilently()
+{
+    checkUpdate(false);
+}
+
+void AppController::checkUpdate(bool interactive)
+{
+    if (m_updateStatus == 1) // 防止重复触发（手动/定时会撞车）
         return;
+    if (m_updateDlState == 1 || m_updateDlState == 2)
+        return; // 正在下载或已下载好，不必再查
     if (!m_nam)
         m_nam = new QNetworkAccessManager(this);
-    m_updateStatus = 1;
+    if (interactive)
+        m_updateStatus = 1;
     m_updateMessage.clear();
     // 重新检查会让旧的下载结果失效
     m_updateDlState = 0;
@@ -1645,12 +1668,16 @@ void AppController::tryUpdateSource()
         if (compareVersions(tag, appVersion()) > 0) {
             m_updateStatus = 3;
             m_latestVersion = tag;
-            m_updateMessage = tr("发现新版本 %1，建议更新。").arg(tag);
-        } else {
-            m_updateStatus = 2;
-            m_latestVersion = tag;
-            m_updateMessage = tr("当前已是最新版本。");
+            m_updateMessage = tr("发现新版本 %1，正在自动下载…").arg(tag);
+            Q_EMIT updateStatusChanged();
+            // 立即下载（仅安装需要用户确认）；下载中/已就绪时不重复触发
+            if (m_updateDlState != 1 && m_updateDlState != 2)
+                downloadUpdate();
+            return;
         }
+        m_updateStatus = 2;
+        m_latestVersion = tag;
+        m_updateMessage = tr("当前已是最新版本。");
         Q_EMIT updateStatusChanged();
     });
 }

@@ -57,6 +57,7 @@ class AppController : public QObject
     Q_PROPERTY(QString updateMessage READ updateMessage NOTIFY updateStatusChanged)
     // ---- 应用内自动更新：镜像链下载 + 校验 + 静默安装 ----
     Q_PROPERTY(int updateDlState READ updateDlState NOTIFY updateDlStateChanged)
+    Q_PROPERTY(bool updateReady READ updateReady NOTIFY updateDlStateChanged)
     Q_PROPERTY(int updateDlPercent READ updateDlPercent NOTIFY updateDlStateChanged)
     Q_PROPERTY(QString updateDlMessage READ updateDlMessage NOTIFY updateDlStateChanged)
     Q_PROPERTY(QString logFilePath READ logFilePath CONSTANT)
@@ -179,17 +180,22 @@ public:
     QString latestVersion() const { return m_latestVersion; }
     QString updateMessage() const { return m_updateMessage; }
     int updateDlState() const { return m_updateDlState; } // 0未下载 1下载中 2已就绪(可安装) 3失败
+    bool updateReady() const { return m_updateDlState == 2; }
     int updateDlPercent() const { return m_updateDlPercent; }
     QString updateDlMessage() const { return m_updateDlMessage; }
     QString logFilePath() const;
 
     Q_INVOKABLE void checkUpdate();
+    void checkUpdateSilently(); // 定时/启动静默检查：不显示「检查中」，发现新版本自动下载
     Q_INVOKABLE void openReleasesPage();
     Q_INVOKABLE void openMirrorDownload(); // 国内镜像加速下载最新安装包
     Q_INVOKABLE void downloadUpdate();     // 镜像链下载安装包到临时目录并校验
     Q_INVOKABLE void installUpdate();      // 启动安装程序（静默覆盖）并退出本程序
     Q_INVOKABLE void openLogDir();
     Q_INVOKABLE bool exportLog(const QString &pathOrUrl);
+
+    // 私有实现：interactive=true 时显示「检查中」状态（手动点击），false 为静默检查
+    void checkUpdate(bool interactive);
 
     // 语义化版本比较：忽略 v/V 前缀，按 . 分段数值比较；a>b 返回 1，相等 0，a<b 返回 -1
     static int compareVersions(const QString &a, const QString &b);

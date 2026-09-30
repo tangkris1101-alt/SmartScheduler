@@ -13,9 +13,10 @@ Item {
         switch (app.updateStatus) {
         case 1: return qsTr("正在检查更新…")
         case 2: return qsTr("✓ 当前已是最新版本（v%1）").arg(app.appVersion)
-        case 3: return qsTr("发现新版本 %1，建议更新。").arg(app.latestVersion)
+        case 3: return app.updateMessage !== "" ? app.updateMessage
+                                                : qsTr("发现新版本 %1，正在自动下载…").arg(app.latestVersion)
         case 4: return app.updateMessage
-        default: return qsTr("尚未检查更新")
+        default: return qsTr("启动时与每 5 分钟自动检查一次；发现新版本会自动下载，安装需你确认")
         }
     }
     function updateStatusColor() {
@@ -127,24 +128,21 @@ Item {
                         Layout.fillWidth: true
                         spacing: Theme.spacingM
                         AppButton {
-                            text: app.updateStatus === 1 ? qsTr("检查中…") : qsTr("检查更新")
+                            text: app.updateStatus === 1 ? qsTr("检查中…") : qsTr("立即检查")
                             variant: app.updateStatus === 3 ? "default" : "primary"
                             enabled: app.updateStatus !== 1
                             onClicked: app.checkUpdate()
                         }
                         AppButton {
-                            visible: app.updateStatus === 3
+                            visible: app.updateDlState === 2
                             variant: "primary"
-                            enabled: app.updateDlState !== 1
-                            text: app.updateDlState === 2 ? qsTr("✔ 安装更新")
-                                : app.updateDlState === 1 ? qsTr("下载中…")
-                                : qsTr("⬇ 自动下载并安装")
-                            onClicked: {
-                                if (app.updateDlState === 2)
-                                    installConfirm.open()
-                                else
-                                    app.downloadUpdate()
-                            }
+                            text: qsTr("✔ 安装更新")
+                            onClicked: installConfirm.open()
+                        }
+                        AppButton {
+                            visible: app.updateStatus === 3 && app.updateDlState !== 1 && app.updateDlState !== 2
+                            text: qsTr("⬇ 重新下载")
+                            onClicked: app.downloadUpdate()
                         }
                         AppButton {
                             visible: app.updateStatus === 3 && app.updateDlState !== 2
@@ -186,7 +184,8 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         visible: app.updateDlState === 2
-                        text: qsTr("✓ 安装包已下载并校验通过。点击「安装更新」后将关闭本程序并自动完成安装。")
+                        text: qsTr("✓ 新版本 %1 已自动下载并校验通过。点击「安装更新」后将关闭本程序并自动完成安装。")
+                              .arg(app.latestVersion)
                         color: Theme.success
                         font.pixelSize: Theme.fontCaption
                         wrapMode: Text.WordWrap
