@@ -40,6 +40,7 @@ private Q_SLOTS:
     void updateProjectInfo();
     void qualityReport();
     void recentFilesOps();
+    void batchClassesWithAutoGroup();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -666,6 +667,66 @@ void TestApp::recentFilesOps()
     const int afterClear = spy.count();
     app.clearRecentFiles();
     QCOMPARE(spy.count(), afterClear);
+}
+
+void TestApp::batchClassesWithAutoGroup()
+{
+    AppController app;
+    app.newProject(QStringLiteral("批量建班校"), 5, 7, 4, 20);
+
+    // 前缀建组：高一1/2班 → 高一年级；高二1班 → 高二年级；
+    // 无数字（实验班）与数字开头（3班）不建组；空行忽略
+    const QVariantMap res = app.addClassesWithAutoGroup(
+        {QStringLiteral(" 高一1班 "), QStringLiteral("高一2班"), QStringLiteral("高二1班"),
+         QStringLiteral("实验班"), QStringLiteral("3班"), QStringLiteral("   ")});
+    QCOMPARE(res.value(QStringLiteral("created")).toInt(), 5);
+    QCOMPARE(app.classCount(), 5);
+
+    const auto *school = app.school();
+    QSet<QString> names;
+    for (const auto &g : school->groups)
+        names.insert(g.name);
+    QVERIFY(names.contains(QStringLiteral("高一年级")));
+    QVERIFY(names.contains(QStringLiteral("高二年级")));
+    QCOMPARE(school->groups.size(), 2);
+
+    const sched::Group *g1 = nullptr;
+    for (const auto &g : school->groups) {
+        if (g.name == QStringLiteral("高一年级"))
+            g1 = &g;
+    }
+    QVERIFY(g1);
+    QCOMPARE(g1->memberIds.size(), 2);
+
+    // 班级的 gradeId 已指向所在年级组（高二1班→高二年级；实验班/3班不建组）
+    qint64 g2id = -1;
+    for (const auto &g : school->groups) {
+        if (g.name == QStringLiteral("高二年级"))
+            g2id = g.id;
+    }
+    for (const auto &c : school->classes) {
+        if (c.name.startsWith(QStringLiteral("高一")))
+            QCOMPARE(c.gradeId, g1->id);
+        else if (c.name.startsWith(QStringLiteral("高二")))
+            QCOMPARE(c.gradeId, g2id);
+        else
+            QCOMPARE(c.gradeId, qint64(-1));
+    }
+
+    // 再次批量：同名组并入而不新建
+    app.addClassesWithAutoGroup({QStringLiteral("高一3班")});
+    QCOMPARE(app.school()->groups.size(), 2);
+    for (const auto &g : app.school()->groups) {
+        if (g.name == QStringLiteral("高一年级"))
+            QCOMPARE(g.memberIds.size(), 3);
+    }
+
+    // 全空输入：不新增
+    QCOMPARE(app.addClassesWithAutoGroup({QStringLiteral(" "), QString()})
+                 .value(QStringLiteral("created"))
+                 .toInt(),
+             0);
+    QCOMPARE(app.classCount(), 6);
 }
 
 void TestApp::schedulerBridge()

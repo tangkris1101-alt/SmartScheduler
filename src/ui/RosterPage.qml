@@ -9,6 +9,7 @@ Item {
 
     property int currentTab: 0
     property int selectedRow: -1
+    property string batchMsg: ""
     // 刷新计数：QAbstractListModel::get() 不参与绑定，数据变更后递增它强制单元格重读
     property int rev: 0
 
@@ -86,6 +87,22 @@ Item {
                 enabled: root.selectedRow >= 0 && root.selectedRow < root.currentModel.count
                 onClicked: deleteDialog.open()
             }
+        }
+
+        // 批量添加结果提示（几秒后自动消失）
+        Text {
+            Layout.fillWidth: true
+            visible: root.batchMsg !== ""
+            text: root.batchMsg
+            color: Theme.success
+            font.pixelSize: Theme.fontCaption
+            wrapMode: Text.WordWrap
+        }
+
+        Timer {
+            id: msgTimer
+            interval: 6000
+            onTriggered: root.batchMsg = ""
         }
 
         // 表格卡片
@@ -261,9 +278,30 @@ Item {
             return n
         }
         function apply() {
+            if (root.currentTab === 0 && autoGroupSwitch.checked) {
+                const res = app.addClassesWithAutoGroup(pendingNames())
+                const created = res.created !== undefined ? res.created : 0
+                if (created > 0) {
+                    root.currentModel.refresh()
+                    const groups = res.groups !== undefined ? res.groups : []
+                    const names = []
+                    for (const g of groups)
+                        names.push(qsTr("%1（%2 个班）").arg(g.name).arg(g.memberCount))
+                    root.batchMsg = names.length > 0
+                            ? qsTr("已添加 %1 行，并建/并入分组：%2").arg(created).arg(names.join(qsTr("、")))
+                            : qsTr("已添加 %1 行").arg(created)
+                    msgTimer.restart()
+                    pasteArea.text = ""
+                    batchDialog.close()
+                } else {
+                    status = qsTr("没有可添加的名称，请检查输入")
+                }
+                return
+            }
             const added = root.currentModel.appendRows(pendingNames())
             if (added > 0) {
-                status = qsTr("已添加 %1 行").arg(added)
+                root.batchMsg = qsTr("已添加 %1 行").arg(added)
+                msgTimer.restart()
                 pasteArea.text = ""
                 batchDialog.close()
             } else {
@@ -392,6 +430,26 @@ Item {
                         const head = names.slice(0, 4).join(qsTr("、"))
                         return qsTr("将生成：%1%2").arg(head).arg(names.length > 4 ? qsTr(" …") : "")
                     }
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            RowLayout {
+                Layout.leftMargin: Theme.spacingL
+                Layout.rightMargin: Theme.spacingL
+                Layout.fillWidth: true
+                Layout.topMargin: Theme.spacingXS
+                visible: root.currentTab === 0
+                spacing: Theme.spacingS
+                AppSwitch {
+                    id: autoGroupSwitch
+                    checked: true
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("同时按名称前缀创建年级组：如「高一1班、高一2班」→ 建「高一年级」并入组；同名组已存在则直接并入。名称不含数字（如「实验班」）不建组。")
                     color: Theme.textSecondary
                     font.pixelSize: Theme.fontCaption
                     wrapMode: Text.WordWrap

@@ -18,6 +18,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -55,6 +56,94 @@ QString AppController::toLocalPath(const QString &pathOrUrl)
 QStringList AppController::recentFiles() const
 {
     return QSettings().value(QStringLiteral("recentFiles")).toStringList();
+}
+
+namespace {
+
+// 班级名 → 分组前缀："高一1班"→"高一"；"3班"→""（无前缀，不建组）
+QString classGroupPrefix(const QString &className)
+{
+    bool hasDigit = false;
+    int firstDigit = -1;
+    for (int i = 0; i < className.size(); ++i) {
+        if (className.at(i).isDigit()) {
+            hasDigit = true;
+            firstDigit = i;
+            break;
+        }
+    }
+    if (!hasDigit || firstDigit <= 0)
+        return {}; // 没有数字或数字开头（如「3班」）不自动分组
+    QString prefix = className.left(firstDigit).trimmed();
+    while (prefix.endsWith(QStringLiteral("班")))
+        prefix.chop(1);
+    return prefix;
+}
+
+// 前缀 → 年级组名："高一"→"高一年级"；"一年级"→"一年级"
+QString gradeGroupNameFor(const QString &prefix)
+{
+    if (prefix.endsWith(QStringLiteral("年级")) || prefix.endsWith(QStringLiteral("级")))
+        return prefix;
+    return prefix + QStringLiteral("年级");
+}
+
+} // namespace
+
+QVariantMap AppController::addClassesWithAutoGroup(const QStringList &names)
+{
+    QVariantMap out;
+    if (!m_hasProject)
+        return out;
+    int created = 0;
+    QSet<qint64> touched;
+    for (const QString &raw : names) {
+        const QString name = raw.trimmed();
+        if (name.isEmpty())
+            continue;
+        sched::ClassInfo c;
+        c.name = name;
+        const QString prefix = classGroupPrefix(name);
+        if (!prefix.isEmpty()) {
+            const QString gname = gradeGroupNameFor(prefix);
+            qint64 gid = -1;
+            for (const auto &g : m_school.groups) {
+                if (g.type == sched::Group::Type::Grade && g.name == gname) {
+                    gid = g.id;
+                    break;
+                }
+            }
+            if (gid < 0) {
+                sched::Group g;
+                g.type = sched::Group::Type::Grade;
+                g.name = gname;
+                gid = m_school.addGroup(g);
+            }
+            c.gradeId = gid;
+        }
+        const qint64 cid = m_school.addClass(c);
+        ++created;
+        if (c.gradeId >= 0) {
+            m_school.findGroup(c.gradeId)->memberIds.append(cid);
+            touched.insert(c.gradeId);
+        }
+    }
+    if (created == 0)
+        return out;
+
+    QVariantList groups;
+    for (qint64 gid : touched) {
+        const sched::Group *g = m_school.findGroup(gid);
+        if (!g)
+            continue;
+        groups.append(QVariantMap{{QStringLiteral("name"), g->name},
+                                  {QStringLiteral("memberCount"), g->memberIds.size()}});
+    }
+    out.insert(QStringLiteral("created"), created);
+    out.insert(QStringLiteral("groups"), groups);
+    markDirty();
+    Q_EMIT projectChanged(); // 名单/分组模型全量重建
+    return out;
 }
 
 void AppController::removeRecentFile(const QString &path)

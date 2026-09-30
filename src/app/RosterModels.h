@@ -45,6 +45,8 @@ public:
     Q_INVOKABLE qint64 appendRow(); // 追加一行（默认名），返回新 id
     // 批量追加：忽略空行、名称去首尾空白；返回实际新增行数
     Q_INVOKABLE int appendRows(const QStringList &names);
+    // 外部（如按前缀建组的批量接口）改过名单后，让视图重建
+    Q_INVOKABLE void refresh() { fullReset(); }
     Q_INVOKABLE bool removeRow(int row); // 走 School 级联删除
     Q_INVOKABLE qint64 idAt(int row) const;
 

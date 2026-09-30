@@ -96,6 +96,10 @@ public:
     // 最近打开：移除单项 / 清空列表（只改本地记录，不动磁盘文件）
     Q_INVOKABLE void removeRecentFile(const QString &path);
     Q_INVOKABLE void clearRecentFiles();
+
+    // 批量建班并按名称前缀自动建/并入年级组（"高一1班"→"高一年级"）
+    // 返回 {created, groups:[{name, memberCount}]}；名称不含数字时不建组
+    Q_INVOKABLE QVariantMap addClassesWithAutoGroup(const QStringList &names);
     Q_INVOKABLE bool openProject(const QString &pathOrUrl);
     Q_INVOKABLE bool saveProject();    // 无路径时返回 false（QML 弹出另存对话框）
     Q_INVOKABLE bool saveProjectAs(const QString &pathOrUrl);
