@@ -39,6 +39,7 @@ qt_add_qml_module(SmartScheduler
         ui/SchedulerPage.qml
         ui/TimetablePage.qml
         ui/PrintPage.qml
+        ui/QualityReportPage.qml
         ui/SettingsPage.qml
         ui/ImportExcelDialog.qml
         ui/OnboardingDialog.qml

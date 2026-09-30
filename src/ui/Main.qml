@@ -30,7 +30,8 @@ ApplicationWindow {
         { page: 6, group: "_output", icon: "▶️", label: qsTr("自动排课"), step: 6 },
         { page: 7, group: "_output", icon: "📊", label: qsTr("课表查看"), step: 7 },
         { page: 8, group: "_output", icon: "🖨️", label: qsTr("打印输出"), step: 8 },
-        { page: 9, group: "_bottom", icon: "🛠️", label: qsTr("设置"),     step: 0 }
+        { page: 9, group: "_output", icon: "📈", label: qsTr("质量报告"), step: 9 },
+        { page: 10, group: "_bottom", icon: "🛠️", label: qsTr("设置"),     step: 0 }
     ]
 
     function navGroupTitle(group) {
@@ -47,7 +48,7 @@ ApplicationWindow {
         if (page === 3) return app.courseCount > 0 && app.teacherCount > 0 // 课程设置：有课程和老师才可配置特征
         if (page === 4) return app.planEntryCount > 0
         if (page === 5) return app.hasProject && app.constraintCount > 0 // hasProject 让项目切换时重算
-        if (page >= 6 && page <= 8) return app.hasSchedule
+        if (page >= 6 && page <= 9) return app.hasSchedule
         return false
     }
 
@@ -61,10 +62,11 @@ ApplicationWindow {
     Component { id: engineComp; SchedulerPage {} }
     Component { id: tableComp; TimetablePage {} }
     Component { id: printComp; PrintPage {} }
+    Component { id: qualityComp; QualityReportPage {} }
     Component { id: settingsComp; SettingsPage {} }
     readonly property var pageComponents: [homeComp, rosterComp, groupsComp, coursesComp,
                                            planComp, limitComp, engineComp, tableComp, printComp,
-                                           settingsComp]
+                                           qualityComp, settingsComp]
 
     // ---- 关闭确认 ----
     // Qt.quit() 会再次触发窗口关闭事件 → 本守卫会把退出也拦下来；

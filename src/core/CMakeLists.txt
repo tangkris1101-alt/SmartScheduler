@@ -1,5 +1,7 @@
 # sched_core：核心领域模型静态库（仅依赖 Qt Core，不依赖 GUI）
 add_library(sched_core STATIC
+    metrics/QualityMetrics.cpp
+    metrics/QualityMetrics.h
     model/ClassInfo.h
     model/Classroom.h
     model/CombinedGroup.h

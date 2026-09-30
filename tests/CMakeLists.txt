@@ -19,3 +19,7 @@ add_test(NAME tst_app COMMAND tst_app)
 add_executable(tst_excel tst_excel.cpp)
 target_link_libraries(tst_excel PRIVATE sched_core sched_data Qt6::Test)
 add_test(NAME tst_excel COMMAND tst_excel)
+
+add_executable(tst_metrics tst_metrics.cpp)
+target_link_libraries(tst_metrics PRIVATE sched_core Qt6::Test)
+add_test(NAME tst_metrics COMMAND tst_metrics)

@@ -203,7 +203,7 @@ int main(int argc, char *argv[])
             auto *page = new int(0);
             QTimer *timer = new QTimer(&app);
             QObject::connect(timer, &QTimer::timeout, &app, [&app, w, page, timer]() {
-                if (*page > 9) {
+                if (*page > 10) { // 0..10 共 11 页，含质量报告与设置
                     timer->stop();
                     app.exit(0);
                     return;
@@ -439,6 +439,65 @@ int main(int argc, char *argv[])
                 });
             });
         });
+    }
+
+    // 回归自检：--smoke=report 质量报告页：示例学校排课后报告应有 10 项指标与老师明细，
+    // 并截图存档供人工检查。0 通过，31=指标数量不对，32=老师明细为空，33=截图保存失败
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("report")) {
+        QTimer::singleShot(1200, &app, [&appController]() {
+            appController.createSampleSchool(true); // 排课完成后自动应用结果
+        });
+        // 等排课结束（示例排课约数秒），再切到报告页检查
+        auto *poll = new QTimer(&app);
+        QObject::connect(poll, &QTimer::timeout, &app, [&appController, &app, poll]() {
+            if (!appController.hasSchedule())
+                return;
+            poll->stop();
+            const QVariantMap rep = appController.qualityReport();
+            if (rep.value(QStringLiteral("indicators")).toList().size() != 10) {
+                qWarning("smoke-report: 指标数量不是 10（%lld）",
+                         (long long)rep.value(QStringLiteral("indicators")).toList().size());
+                app.exit(31);
+                return;
+            }
+            if (rep.value(QStringLiteral("teachers")).toList().isEmpty()) {
+                qWarning("smoke-report: 老师明细为空");
+                app.exit(32);
+                return;
+            }
+            QQuickWindow *w = nullptr;
+            const auto windows = QGuiApplication::allWindows();
+            for (auto *win : windows) {
+                auto *qw = qobject_cast<QQuickWindow *>(win);
+                if (qw && qw->property("currentPage").isValid())
+                    w = qw;
+            }
+            if (!w) {
+                app.exit(31);
+                return;
+            }
+            w->setProperty("currentPage", 9); // 质量报告
+            QTimer::singleShot(900, &app, [&appController, &app, w]() {
+                const QString shot = QDir::temp().filePath(QStringLiteral("smoke_quality_report.png"));
+                const QImage img = w->grabWindow();
+                if (img.isNull() || !img.save(shot)) {
+                    qWarning("smoke-report: 截图保存失败");
+                    app.exit(33);
+                    return;
+                }
+                qWarning("smoke-report: 指标 10 项、老师明细非空、截图 %s", qPrintable(shot));
+                const QVariantMap rep = appController.qualityReport();
+                for (const auto &v : rep.value(QStringLiteral("indicators")).toList()) {
+                    const QVariantMap m = v.toMap();
+                    qWarning("smoke-report: %s = %g / %g %s", qPrintable(m.value(QStringLiteral("name")).toString()),
+                             m.value(QStringLiteral("value")).toDouble(),
+                             m.value(QStringLiteral("required")).toDouble(),
+                             qPrintable(m.value(QStringLiteral("unit")).toString()));
+                }
+                app.exit(0);
+            });
+        });
+        poll->start(300);
     }
 
     // 回归自检：--smoke=plan-empty 空教学计划状态下，空状态提示应居中于卡片

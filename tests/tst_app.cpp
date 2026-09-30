@@ -38,6 +38,7 @@ private Q_SLOTS:
     void constraintsAndPreassign();
     void gradeMask();
     void updateProjectInfo();
+    void qualityReport();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -564,6 +565,61 @@ void TestApp::updateProjectInfo()
     QCOMPARE(app.daysPerWeek(), 6);
     QCOMPARE(app.constraintCount(), 0);
     QVERIFY(!app.hasSchedule());
+}
+
+void TestApp::qualityReport()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    sched::Group g;
+    g.type = sched::Group::Type::Grade;
+    g.name = QStringLiteral("一年级");
+    const qint64 gid = app.school()->addGroup(g);
+    app.school()->findGroup(gid)->memberIds = {ids.class1, ids.class2};
+
+    // 无课表时也要能出报告（指标为 0 / 缺口）
+    const QVariantMap empty = app.qualityReport();
+    QCOMPARE(empty.value(QStringLiteral("hasSchedule")).toBool(), false);
+    QCOMPARE(empty.value(QStringLiteral("indicators")).toList().size(), 10);
+    QCOMPARE(empty.value(QStringLiteral("grades")).toList().size(), 1);
+
+    // 排一节课后：排上节数 1、老师撞课 0
+    sched::PlanEntry e;
+    e.classId = ids.class1;
+    e.courseId = ids.yuwen;
+    e.teacherIds = {ids.tZhang};
+    e.weeklyPeriods = 1;
+    app.school()->addPlanEntry(e);
+    app.school()->schedule.setAssignment(ids.class1, 0, 0, ids.yuwen);
+
+    const QVariantMap rep = app.qualityReport();
+    QCOMPARE(rep.value(QStringLiteral("hasSchedule")).toBool(), true);
+    QCOMPARE(rep.value(QStringLiteral("hardViolations")).toInt(), 0);
+    bool foundPlaced = false, foundClash = false;
+    for (const auto &v : rep.value(QStringLiteral("indicators")).toList()) {
+        const QVariantMap m = v.toMap();
+        if (m.value(QStringLiteral("key")).toString() == QLatin1StringView("placedPeriods")) {
+            foundPlaced = true;
+            QCOMPARE(m.value(QStringLiteral("value")).toDouble(), 1.0);
+            QCOMPARE(m.value(QStringLiteral("required")).toDouble(), 1.0);
+        }
+        if (m.value(QStringLiteral("key")).toString() == QLatin1StringView("teacherClash")) {
+            foundClash = true;
+            QCOMPARE(m.value(QStringLiteral("value")).toDouble(), 0.0);
+        }
+    }
+    QVERIFY(foundPlaced && foundClash);
+    QCOMPARE(rep.value(QStringLiteral("teachers")).toList().size(), 1);
+
+    // HTML 报告：结构完整、含关键口径与打印样式
+    const QString html = AppController::buildQualityReportHtml(*app.school());
+    QVERIFY(html.startsWith(QStringLiteral("<!DOCTYPE html>")));
+    QVERIFY(html.contains(QStringLiteral("M3b校")));
+    QVERIFY(html.contains(QStringLiteral("十项指标")));
+    QVERIFY(html.contains(QStringLiteral("教案连续性")));
+    QVERIFY(html.contains(QStringLiteral("教师开窗")));
+    QVERIFY(html.contains(QStringLiteral("@media print")));
+    QVERIFY(html.contains(QStringLiteral("一年级"))); // 年级组分段
 }
 
 void TestApp::schedulerBridge()

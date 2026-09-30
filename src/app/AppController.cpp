@@ -2,6 +2,7 @@
 
 #include "ExcelIo.h"
 #include "SchedulerEngine.h"
+#include "metrics/QualityMetrics.h"
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
@@ -951,7 +952,332 @@ QVariantList AppController::masterGrid() const
     return rows;
 }
 
-// ==================== Excel 批量导入 ====================
+// ==================== 质量报告（十项指标 + 老师五项）====================
+
+namespace {
+
+QVariantList indicatorsToVariant(const QVector<sched::QualityIndicator> &list)
+{
+    QVariantList out;
+    for (const auto &i : list) {
+        out.append(QVariantMap{{QStringLiteral("key"), i.key},
+                               {QStringLiteral("name"), i.name},
+                               {QStringLiteral("hard"), i.hard},
+                               {QStringLiteral("higherBetter"), i.higherBetter},
+                               {QStringLiteral("value"), i.value},
+                               {QStringLiteral("required"), i.required},
+                               {QStringLiteral("unit"), i.unit},
+                               {QStringLiteral("isRatio"), i.isRatio}});
+    }
+    return out;
+}
+
+QVariantList teachersToVariant(const QVector<sched::TeacherQuality> &list)
+{
+    QVariantList out;
+    for (const auto &t : list) {
+        out.append(QVariantMap{{QStringLiteral("id"), t.teacherId},
+                               {QStringLiteral("name"), t.name},
+                               {QStringLiteral("periods"), t.weeklyPeriods},
+                               {QStringLiteral("continuity"), t.continuity},
+                               {QStringLiteral("window"), t.window},
+                               {QStringLiteral("balance"), t.balance},
+                               {QStringLiteral("fairness"), t.fairness},
+                               {QStringLiteral("composite"), t.composite}});
+    }
+    return out;
+}
+
+QVariantMap averagesToVariant(const sched::QualityMetricsResult &r)
+{
+    return {{QStringLiteral("continuity"), r.avgContinuity},
+            {QStringLiteral("window"), r.avgWindow},
+            {QStringLiteral("balance"), r.avgBalance},
+            {QStringLiteral("fairness"), r.avgFairness},
+            {QStringLiteral("composite"), r.avgComposite}};
+}
+
+// 指标格式化：有分母的显示 "值 / 分母"，否则显示数值
+QString formatIndicator(const sched::QualityIndicator &i)
+{
+    auto num = [](double v) {
+        if (qFuzzyIsNull(v - qRound(v)))
+            return QString::number(qRound(v));
+        return QString::number(v, 'f', 2);
+    };
+    if (i.isRatio && i.required > 0)
+        return QStringLiteral("%1 / %2").arg(num(i.value), num(i.required));
+    return num(i.value);
+}
+
+QString indicatorBadge(const sched::QualityIndicator &i)
+{
+    return i.hard ? QStringLiteral("<span class=\"badge hard\">硬</span>")
+                  : QStringLiteral("<span class=\"badge soft\">软</span>");
+}
+
+QString indicatorDirection(const sched::QualityIndicator &i)
+{
+    return i.higherBetter ? QStringLiteral("↑ 越高越好") : QStringLiteral("↓ 越低越好");
+}
+
+} // namespace
+
+QVariantMap AppController::qualityReport() const
+{
+    QVariantMap out;
+    const sched::QualityMetricsResult overall = sched::computeQualityMetrics(m_school);
+    out.insert(QStringLiteral("indicators"), indicatorsToVariant(overall.indicators));
+    out.insert(QStringLiteral("teachers"), teachersToVariant(overall.teachers));
+    out.insert(QStringLiteral("averages"), averagesToVariant(overall));
+    out.insert(QStringLiteral("teacherCount"), overall.teachers.size());
+    out.insert(QStringLiteral("hasSchedule"), hasSchedule());
+    int hardViolations = 0;
+    for (const auto &i : overall.indicators) {
+        if (!i.hard)
+            continue;
+        hardViolations += i.isRatio ? std::max(0, qRound(i.required - i.value)) : qRound(i.value);
+    }
+    out.insert(QStringLiteral("hardViolations"), hardViolations);
+
+    QVariantList grades;
+    for (const auto &g : m_school.groups) {
+        if (g.type != sched::Group::Type::Grade)
+            continue;
+        QVector<qint64> ids;
+        for (qint64 cid : g.memberIds) {
+            if (m_school.findClass(cid))
+                ids.append(cid);
+        }
+        if (ids.isEmpty())
+            continue;
+        const sched::QualityMetricsResult r = sched::computeQualityMetrics(m_school, ids);
+        grades.append(QVariantMap{{QStringLiteral("id"), g.id},
+                                  {QStringLiteral("name"), g.name},
+                                  {QStringLiteral("classCount"), ids.size()},
+                                  {QStringLiteral("indicators"), indicatorsToVariant(r.indicators)},
+                                  {QStringLiteral("averages"), averagesToVariant(r)}});
+    }
+    out.insert(QStringLiteral("grades"), grades);
+    return out;
+}
+
+QString AppController::buildQualityReportHtml(const sched::School &school)
+{
+    const sched::QualityMetricsResult overall = sched::computeQualityMetrics(school);
+    QString h;
+    h.reserve(64 * 1024);
+    h += QStringLiteral(
+        "<!DOCTYPE html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        "<title>%1 排课质量报告</title>\n<style>\n"
+        ":root{--brand:#2563eb;--hard:#dc2626;--soft:#b45309;--ok:#15803d;--line:#e2e8f0;"
+        "--bg:#f8fafc;--ink:#0f172a;--muted:#64748b;}\n"
+        "*{box-sizing:border-box}\n"
+        "body{margin:0;padding:32px 28px 64px;font:15px/1.65 \"Microsoft YaHei\",\"PingFang SC\","
+        "system-ui,sans-serif;color:var(--ink);background:#fff;max-width:1100px;margin:0 auto}\n"
+        "h1{font-size:26px;margin:0 0 6px}\n"
+        "h2{font-size:19px;margin:34px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}\n"
+        "h3{font-size:16px;margin:22px 0 10px}\n"
+        ".sub{color:var(--muted);font-size:13px;margin:0 0 4px}\n"
+        ".cards{display:flex;flex-wrap:wrap;gap:12px;margin:18px 0}\n"
+        ".card{flex:1 1 200px;border:1px solid var(--line);border-radius:10px;padding:12px 14px;"
+        "background:var(--bg);break-inside:avoid}\n"
+        ".card .k{font-size:12px;color:var(--muted)}\n"
+        ".card .v{font-size:22px;font-weight:700;margin-top:2px}\n"
+        ".good{color:var(--ok)}.bad{color:var(--hard)}\n"
+        "table{width:100%;border-collapse:collapse;margin:10px 0 18px;font-size:14px}\n"
+        "th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}\n"
+        "th{background:var(--bg);font-weight:600;position:sticky;top:0}\n"
+        "td.num{text-align:right;font-variant-numeric:tabular-nums}\n"
+        ".badge{display:inline-block;border-radius:999px;padding:1px 8px;font-size:12px;"
+        "border:1px solid currentColor}\n"
+        ".badge.hard{color:var(--hard)}.badge.soft{color:var(--soft)}\n"
+        ".dir{color:var(--muted);font-size:12px}\n"
+        ".note{border-left:4px solid var(--brand);background:var(--bg);padding:10px 14px;"
+        "border-radius:0 8px 8px 0;break-inside:avoid}\n"
+        ".formula{font-family:Consolas,Menlo,monospace;background:var(--bg);border:1px solid "
+        "var(--line);border-radius:6px;padding:6px 10px;display:inline-block;margin:4px 0}\n"
+        "footer{margin-top:36px;color:var(--muted);font-size:12px}\n"
+        "@media print{@page{size:A4 landscape;margin:12mm}\n"
+        " body{padding:0;max-width:none;font-size:12px;-webkit-print-color-adjust:exact;"
+        "print-color-adjust:exact}\n"
+        " h2{break-after:avoid} table{break-inside:auto} tr{break-inside:avoid}\n"
+        " th{position:static} .cards{gap:8px} .card{flex:1 1 160px}}\n"
+        "</style></head><body>\n")
+             .arg(school.name.toHtmlEscaped());
+
+    h += QStringLiteral("<h1>%1 · 排课质量报告</h1>\n")
+             .arg(school.name.toHtmlEscaped());
+    h += QStringLiteral("<p class=\"sub\">作息：每周 %1 天 × 每天 %2 节（上午 %3 节） · 学期 %4 周 · "
+                        "自动排课结果质量评估</p>\n")
+             .arg(school.timeConfig.daysPerWeek)
+             .arg(school.timeConfig.periodsPerDay)
+             .arg(school.timeConfig.morningPeriods)
+             .arg(school.timeConfig.weeksPerTerm);
+
+    // 摘要
+    int clash = 0, courseForbid = 0, teacherForbid = 0;
+    QString placedText;
+    for (const auto &i : overall.indicators) {
+        if (i.key == QLatin1StringView("teacherClash"))
+            clash = qRound(i.value);
+        else if (i.key == QLatin1StringView("courseForbiddenSlot"))
+            courseForbid = qRound(i.value);
+        else if (i.key == QLatin1StringView("teacherForbiddenSlot"))
+            teacherForbid = qRound(i.value);
+        else if (i.key == QLatin1StringView("placedPeriods"))
+            placedText = formatIndicator(i);
+    }
+    h += QStringLiteral("<div class=\"cards\">\n");
+    h += QStringLiteral("<div class=\"card\"><div class=\"k\">排上的节数</div><div class=\"v\">%1</div></div>\n")
+             .arg(placedText.isEmpty() ? QStringLiteral("-") : placedText);
+    h += QStringLiteral("<div class=\"card\"><div class=\"k\">老师撞课</div><div class=\"v %1\">%2 处</div></div>\n")
+             .arg(clash == 0 ? QStringLiteral("good") : QStringLiteral("bad"))
+             .arg(clash);
+    h += QStringLiteral("<div class=\"card\"><div class=\"k\">学科排进不排时段</div><div class=\"v %1\">%2 节</div></div>\n")
+             .arg(courseForbid == 0 ? QStringLiteral("good") : QStringLiteral("bad"))
+             .arg(courseForbid);
+    h += QStringLiteral("<div class=\"card\"><div class=\"k\">老师排进不排时段</div><div class=\"v %1\">%2 节</div></div>\n")
+             .arg(teacherForbid == 0 ? QStringLiteral("good") : QStringLiteral("bad"))
+             .arg(teacherForbid);
+    h += QStringLiteral("<div class=\"card\"><div class=\"k\">老师五项综合（平均，越低越好）</div>"
+                        "<div class=\"v\">%1</div></div>\n")
+             .arg(QString::number(overall.avgComposite, 'f', 2));
+    h += QStringLiteral("</div>\n");
+
+    // 十项指标（全校）
+    h += QStringLiteral("<h2>十项指标（全校）</h2>\n<table>\n"
+                        "<tr><th>这一项</th><th>硬/软</th><th>方向</th><th>实测</th><th>单位</th></tr>\n");
+    for (const auto &i : overall.indicators) {
+        h += QStringLiteral("<tr><td>%1</td><td>%2</td><td class=\"dir\">%3</td>"
+                            "<td class=\"num\">%4</td><td>%5</td></tr>\n")
+                 .arg(i.name.toHtmlEscaped(), indicatorBadge(i), indicatorDirection(i),
+                      formatIndicator(i), i.unit.toHtmlEscaped());
+    }
+    h += QStringLiteral("</table>\n");
+
+    // 老师五项平均
+    h += QStringLiteral("<h2>老师五项（全校平均）</h2>\n<table>\n"
+                        "<tr><th>教案连续性 ↑1</th><th>教师开窗 ↓</th><th>周内均衡 ↓</th>"
+                        "<th>平行班先后公平 ↓</th><th>综合 ↓</th></tr>\n");
+    h += QStringLiteral("<tr><td class=\"num\">%1</td><td class=\"num\">%2</td><td class=\"num\">%3</td>"
+                        "<td class=\"num\">%4</td><td class=\"num\">%5</td></tr>\n")
+             .arg(QString::number(overall.avgContinuity, 'f', 3),
+                  QString::number(overall.avgWindow, 'f', 2),
+                  QString::number(overall.avgBalance, 'f', 2),
+                  QString::number(overall.avgFairness, 'f', 2),
+                  QString::number(overall.avgComposite, 'f', 2));
+    h += QStringLiteral("</table>\n");
+
+    // 按年级组
+    for (const auto &g : school.groups) {
+        if (g.type != sched::Group::Type::Grade)
+            continue;
+        QVector<qint64> ids;
+        for (qint64 cid : g.memberIds) {
+            if (school.findClass(cid))
+                ids.append(cid);
+        }
+        if (ids.isEmpty())
+            continue;
+        const sched::QualityMetricsResult r = sched::computeQualityMetrics(school, ids);
+        h += QStringLiteral("<h2>%1（%2 个班）</h2>\n")
+                 .arg(g.name.toHtmlEscaped())
+                 .arg(ids.size());
+        h += QStringLiteral("<table>\n<tr><th>十项指标</th><th>硬/软</th><th>实测</th><th>单位</th></tr>\n");
+        for (const auto &i : r.indicators) {
+            h += QStringLiteral("<tr><td>%1</td><td>%2</td><td class=\"num\">%3</td><td>%4</td></tr>\n")
+                     .arg(i.name.toHtmlEscaped(), indicatorBadge(i), formatIndicator(i),
+                          i.unit.toHtmlEscaped());
+        }
+        h += QStringLiteral("</table>\n");
+        h += QStringLiteral("<p class=\"sub\">老师五项平均：教案连续性 %1 · 教师开窗 %2 · 周内均衡 %3 · "
+                            "平行班先后公平 %4 · 综合 %5</p>\n")
+                 .arg(QString::number(r.avgContinuity, 'f', 3),
+                      QString::number(r.avgWindow, 'f', 2),
+                      QString::number(r.avgBalance, 'f', 2),
+                      QString::number(r.avgFairness, 'f', 2),
+                      QString::number(r.avgComposite, 'f', 2));
+    }
+
+    // 老师明细
+    if (!overall.teachers.isEmpty()) {
+        h += QStringLiteral("<h2>老师明细（按周节数排序）</h2>\n<table>\n"
+                            "<tr><th>老师</th><th>周节数</th><th>教案连续性 ↑1</th><th>教师开窗 ↓</th>"
+                            "<th>周内均衡 ↓</th><th>平行班先后公平 ↓</th><th>综合 ↓</th></tr>\n");
+        for (const auto &t : overall.teachers) {
+            h += QStringLiteral("<tr><td>%1</td><td class=\"num\">%2</td><td class=\"num\">%3</td>"
+                                "<td class=\"num\">%4</td><td class=\"num\">%5</td>"
+                                "<td class=\"num\">%6</td><td class=\"num\">%7</td></tr>\n")
+                     .arg(t.name.toHtmlEscaped())
+                     .arg(t.weeklyPeriods)
+                     .arg(QString::number(t.continuity, 'f', 3),
+                          QString::number(t.window, 'f', 2),
+                          QString::number(t.balance, 'f', 2),
+                          QString::number(t.fairness, 'f', 2),
+                          QString::number(t.composite, 'f', 2));
+        }
+        h += QStringLiteral("</table>\n");
+    }
+
+    // 口径说明
+    h += QStringLiteral(
+        "<h2>指标怎么算</h2>\n"
+        "<div class=\"note\">硬指标不许破（课时排满、老师不撞课、不排时段、连堂）；软指标是舒适度，"
+        "越低越好，可据此手动微调。</div>\n"
+        "<h3>十项指标</h3>\n<ol>\n"
+        "<li><b>排上的节数</b>：教学计划要求的周课时里已经排上的节数（单双周各按 0.5 节）。</li>\n"
+        "<li><b>老师撞课</b>：同一位老师同一节出现在两个班（单周与双周同格不算，约定合班不算）。</li>\n"
+        "<li><b>学科排进了不排的时段</b>：课程被设了「不排时间」，却仍被排进那些格子。</li>\n"
+        "<li><b>老师排进了不排的时段</b>：老师被设了「不排时间」，却仍被排课。</li>\n"
+        "<li><b>该连堂的连上了</b>：计划要求连堂的课，实际形成连续节的达成数 / 要求数。</li>\n"
+        "<li><b>连堂落在第 1-2 或 4-5 节</b>：连堂尽量不跨大课间、不跨午休，落在习惯位置。</li>\n"
+        "<li><b>语数英排在上午</b>：主课（课程设置里勾选「主课」）落在上午节次的比例。</li>\n"
+        "<li><b>同一科一天上 3 节及以上</b>：某班某天同一科连上三节以上，学生吃不消的次数。</li>\n"
+        "<li><b>老师一天上 5 节及以上</b>：某位老师某天累计 5 节以上，算一个人·天。</li>\n"
+        "<li><b>老师连上 3 节及以上</b>：中间没有空堂连着上三节以上（午休隔开的不算）。</li>\n"
+        "</ol>\n"
+        "<h3>老师五项</h3>\n"
+        "<p><span class=\"formula\">教案连续性 C = 1 / (1 + D̄)</span><br>"
+        "同一位老师、同一门课、同一天教的几个平行班，「这周第几次课」的最大差 D，所有组取平均 D̄。"
+        "几个班齐头并进 C 就是 1。</p>\n"
+        "<p><span class=\"formula\">教师开窗 F = G + q(p_max) − q(p_min)</span><br>"
+        "G 是课与课之间断开的次数，后半截是从第一节到最后一节的跨度（午休算一格）。"
+        "课中间空着、从早拖到晚都会变大。</p>\n"
+        "<p><span class=\"formula\">周内均衡 E = Σ|x_d − x̄| − D_min</span><br>"
+        "x_d 是某位老师星期 d 的节数，减掉「怎么排都躲不掉」的不均 D_min = 2r(N−r)/N。体育不算。</p>\n"
+        "<p><span class=\"formula\">平行班先后公平 B = ½ Σ|v − n/M|</span><br>"
+        "同一位老师同一门课的一组平行班，各班当「试讲班」的次数与理想次数的偏差。</p>\n"
+        "<p><span class=\"formula\">综合 S = F + E + B</span><br>开窗、周内均衡、平行班公平三项加起来，"
+        "一个数看老师整体顺不顺。</p>\n");
+
+    h += QStringLiteral("<footer>由 智排课系统 SmartScheduler 生成 · 数据来源：当前项目的教学计划与排课结果</footer>\n"
+                        "</body></html>\n");
+    return h;
+}
+
+bool AppController::exportQualityReportHtml(const QString &pathOrUrl)
+{
+    QString path = toLocalPath(pathOrUrl);
+    if (!path.endsWith(QLatin1StringView(".html"), Qt::CaseInsensitive))
+        path += QStringLiteral(".html");
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        m_lastError = tr("无法写入文件：%1").arg(path);
+        return false;
+    }
+    const QByteArray data = buildQualityReportHtml(m_school).toUtf8();
+    if (f.write(data) != data.size()) {
+        m_lastError = tr("写入不完整：%1").arg(path);
+        return false;
+    }
+    f.close();
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    return true;
+}
+
+
 
 bool AppController::writeImportTemplate(const QString &pathOrUrl)
 {

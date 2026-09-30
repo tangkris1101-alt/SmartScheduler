@@ -145,6 +145,14 @@ public:
     Q_INVOKABLE QVariantList roomRow(qint64 roomId) const;       // 35 格 [{text,sub}]
     Q_INVOKABLE QVariantList masterGrid() const; // [{classId, className, cells:[35 × {text,courseId,major}]}]
 
+    // ---- 质量报告（十项指标 + 老师五项）----
+    // {indicators:[...], teachers:[...], avgContinuity/avgWindow/avgBalance/avgFairness/avgComposite,
+    //  grades:[{id,name,indicators,avg...}], hasSchedule}
+    Q_INVOKABLE QVariantMap qualityReport() const;
+    Q_INVOKABLE bool exportQualityReportHtml(const QString &pathOrUrl); // 生成自带打印样式的报告并打开
+    // 报告 HTML（独立成静态函数便于测试）
+    static QString buildQualityReportHtml(const sched::School &school);
+
     // ---- Excel 批量导入 ----
     Q_INVOKABLE bool writeImportTemplate(const QString &pathOrUrl);
     // 预览：导入到暂存副本，返回 {created, updated, skipped, errors[]}
