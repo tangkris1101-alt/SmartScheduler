@@ -24,10 +24,12 @@ server/
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/v1/health` | 健康检查 + 当日用量 |
+| GET | `/v1/version` | 版本检查通道：直连 GitHub API 取公开仓最新 release（`?fresh=1` 强制回源，60s 缓存，无缓存且上游不可用时返回 503 让客户端回退） |
 | POST | `/v1/ai/orchestrate` | 编排主入口；`stream:false` 返回 JSON，默认 SSE 流式 |
 | POST | `/v1/ai/feedback` | 采纳率埋点（只记条数，不记内容） |
 
 鉴权：请求头 `X-App-Token: <应用令牌>`；`X-Client-Version` 可选（用于审计）。
+`/v1/health` 与 `/v1/version` 匿名可用（客户端检查更新时尚无令牌上下文）。
 
 限额（均可用环境变量覆盖）：单 IP 5 分钟 40 次、单请求 max_tokens ≤ 4096、
 并发 ≤ 4、工具数 ≤ 40、当日 token 预算 200 万。
