@@ -2801,6 +2801,14 @@ int AppController::compareVersions(const QString &a, const QString &b)
     return 0;
 }
 
+// 本次探测能否据此定论：给出更新的版本随时可信；「不比当前新」只有实时通道说了才算数。
+// 第三方反代 / CDN 会缓存 version.json（发版后仍返回旧版本），它们说「没更新」必须继续问下一个，
+// 否则就会出现「明明发了新版，检查更新却说已是最新」。
+bool AppController::updateProbeConclusive(const QString &tag, const QString &current, bool freshChannel)
+{
+    return freshChannel || compareVersions(tag, current) > 0;
+}
+
 void AppController::checkUpdate()
 {
     checkUpdate(true); // 手动点击：显示「检查中」状态
@@ -2829,59 +2837,76 @@ void AppController::checkUpdate(bool interactive)
     m_downloadedSetup.clear();
     m_latestSha256.clear();
     m_latestSize = 0;
-    m_olderTag.clear();
-    m_olderSetup.clear();
-    m_olderSha256.clear();
-    m_olderSize = 0;
+    m_probeTag.clear();
+    m_probeSetup.clear();
+    m_probeSha256.clear();
+    m_probeSize = 0;
     Q_EMIT updateStatusChanged();
     Q_EMIT updateDlStateChanged();
 
-    // 国内直连 GitHub 不稳定：优先公益反代拉取公开仓的 version.json（实时无缓存、国内可达，
-    // 发布流水线每次发版写入）；其次 GitHub API 直连；最后 jsDelivr CDN（有缓存，兜底用）。
-    // 任一通道失败/超时自动回退下一个。
-    // 注意：raw 及其反代/CDN 都会缓存文件内容（发版后可能仍读到上一个版本），
-    // 因此统一追加一次性查询参数穿透缓存，保证检查结果总是最新的。
+    // 通道分两类：
+    //  · 实时通道（fresh）：自建中继（服务端直连 GitHub API）与 GitHub API 本身，拿到「没更新」即可定论；
+    //  · 缓存通道：公益反代 / jsDelivr 会缓存 version.json（发版后几分钟仍返回旧版本），
+    //    只能用来「尽早发现新版本」，说「已是最新」不算数，要继续问下一个通道。
+    // 这样既能走国内可达的加速通道，又不会像以前那样被缓存钉死在「已是最新」（v1.0.37→v1.0.38 就踩了这个坑）。
     const QString bust = QStringLiteral("?t=%1").arg(QDateTime::currentSecsSinceEpoch());
-    m_updateSources = {
-        QStringLiteral("https://ghfast.top/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust,
-        QStringLiteral("https://gh-proxy.com/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust,
-        QStringLiteral("https://ghproxy.net/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust,
-        QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest"),
-        QStringLiteral("https://cdn.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json") + bust,
+    const QString ver = appVersion();
+    // 手动点击时带 fresh=1：中继会强制回源 GitHub，避免它自己的 60s 缓存挡住刚发布的版本
+    const QString relay = QStringLiteral("https://api.class.feimsg.cn/v1/version?app=%1%2&t=%3")
+                              .arg(ver,
+                                   interactive ? QStringLiteral("&fresh=1") : QString(),
+                                   QString::number(QDateTime::currentSecsSinceEpoch()));
+    m_updateChannels = {
+        {relay, true},
+        {QStringLiteral("https://ghfast.top/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust, false},
+        {QStringLiteral("https://gh-proxy.com/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust, false},
+        {QStringLiteral("https://ghproxy.net/https://raw.githubusercontent.com/tangkris1101-alt/SmartScheduler-Releases/main/version.json") + bust, false},
+        {QStringLiteral("https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest"), true},
+        {QStringLiteral("https://cdn.jsdelivr.net/gh/tangkris1101-alt/SmartScheduler-Releases@main/version.json") + bust, false},
     };
     m_updateAttempt = 0;
+    m_freshChannelAnswered = false;
     tryUpdateSource();
 }
 
-void AppController::tryUpdateSource()
+// 所有通道都问过一遍还没有实时通道给出「已是最新」时的收尾（例如实时通道全被墙/超时）
+void AppController::finishUpdateProbe()
 {
-    if (m_updateAttempt >= m_updateSources.size()) {
-        // 所有通道都只给出比当前更旧的版本（CDN 缓存尚未刷新，或本地是更新的开发版）：
-        // 等价于「没有可更新的版本」，不是失败
-        if (!m_olderTag.isEmpty()) {
-            m_updateStatus = 2;
-            m_latestVersion = m_olderTag; // 记录已发布的（较旧）版本，供日志与下载链路自检使用
-            m_latestSetup = m_olderSetup;
-            m_latestSha256 = m_olderSha256;
-            m_latestSize = m_olderSize;
-            m_updateMessage = tr("当前已是最新版本。");
-            Q_EMIT updateStatusChanged();
-            return;
-        }
-        m_updateStatus = 4;
-        m_updateMessage = tr("自动检查失败（已依次尝试镜像加速、GitHub 直连、国内 CDN），"
-                             "请检查网络后重试，或打开发布页查看。");
+    if (!m_probeTag.isEmpty()) {
+        m_updateStatus = 2;
+        m_latestVersion = m_probeTag; // 记下见过的最高版本，供日志与下载链路自检使用
+        m_latestSetup = m_probeSetup;
+        m_latestSha256 = m_probeSha256;
+        m_latestSize = m_probeSize;
+        m_updateMessage = tr("当前已是最新版本。");
+        if (!m_freshChannelAnswered)
+            qWarning("检查更新: 实时通道均不可达，结论只依据缓存通道，可能滞后");
         Q_EMIT updateStatusChanged();
         return;
     }
-    const QString url = m_updateSources.at(m_updateAttempt++);
+    m_updateStatus = 4;
+    m_updateMessage = tr("自动检查失败（已依次尝试自建加速、镜像反代、GitHub 直连与国内 CDN），"
+                         "请检查网络后重试，或打开发布页查看。");
+    Q_EMIT updateStatusChanged();
+}
+
+
+void AppController::tryUpdateSource()
+{
+    if (m_updateAttempt >= m_updateChannels.size()) {
+        finishUpdateProbe();
+        return;
+    }
+    const UpdateChannel channel = m_updateChannels.at(m_updateAttempt++);
+    const QString url = channel.url;
     QNetworkRequest req{QUrl(url)};
     req.setRawHeader("Accept", "application/vnd.github+json");
     req.setRawHeader("User-Agent", "SmartScheduler-UpdateCheck");
     req.setTransferTimeout(8000); // 8s 超时，避免单一通道卡死
     QNetworkReply *reply = m_nam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, url]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, channel]() {
         reply->deleteLater();
+        const QString url = channel.url;
         if (reply->error() != QNetworkReply::NoError) {
             qWarning("检查更新: 通道 %s 失败（%s），尝试下一通道", qPrintable(url),
                      qPrintable(reply->errorString()));
@@ -2889,7 +2914,7 @@ void AppController::tryUpdateSource()
             return;
         }
         const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
-        // version.json（CDN 通道）用 tag；GitHub API 用 tag_name
+        // version.json（反代/CDN 通道）用 tag；GitHub API 与自建中继都用 tag/tag_name
         QString tag = obj.value(QStringLiteral("tag")).toString();
         if (tag.isEmpty())
             tag = obj.value(QStringLiteral("tag_name")).toString();
@@ -2918,23 +2943,26 @@ void AppController::tryUpdateSource()
                 }
             }
         }
-        qWarning("检查更新: 通道 %s 返回 tag=%s（当前 v%s）", qPrintable(url), qPrintable(tag),
-                 qPrintable(appVersion()));
-        // 通道/CDN 缓存可能返回旧版本：比当前还旧时记下并继续尝试下一通道
-        // （m_latestSetup/Sha256/Size 已指向该通道给出的版本，供下载链路自检使用）
-        if (compareVersions(tag, appVersion()) < 0) {
-            qWarning("检查更新: 通道 %s 返回的 %s 比当前还旧（疑似缓存），尝试下一通道",
-                     qPrintable(url), qPrintable(tag));
-            if (m_olderTag.isEmpty() || compareVersions(tag, m_olderTag) > 0) {
-                m_olderTag = tag;
-                m_olderSetup = m_latestSetup;
-                m_olderSha256 = m_latestSha256;
-                m_olderSize = m_latestSize;
+        const QString current = appVersion();
+        const bool conclusive = updateProbeConclusive(tag, current, channel.fresh);
+        qWarning("检查更新: 通道 %s 返回 tag=%s（当前 v%s，%s通道%s）", qPrintable(url),
+                 qPrintable(tag), qPrintable(current),
+                 channel.fresh ? "实时" : "缓存",
+                 conclusive ? "可定论" : "不足以定论");
+        if (!conclusive) {
+            // 缓存通道说「不比当前新」：可能是反代/CDN 还没刷到新版本，继续问下一个通道；
+            // 顺手记下见过的最高版本，供全部通道都没有更新版本时兜底展示。
+            if (m_probeTag.isEmpty() || compareVersions(tag, m_probeTag) > 0) {
+                m_probeTag = tag;
+                m_probeSetup = m_latestSetup;
+                m_probeSha256 = m_latestSha256;
+                m_probeSize = m_latestSize;
             }
             tryUpdateSource();
             return;
         }
-        if (compareVersions(tag, appVersion()) > 0) {
+        if (compareVersions(tag, current) > 0) {
+
             m_updateStatus = 3;
             m_latestVersion = tag;
             m_updateMessage = tr("发现新版本 %1，正在自动下载…").arg(tag);
@@ -2947,6 +2975,8 @@ void AppController::tryUpdateSource()
         m_updateStatus = 2;
         m_latestVersion = tag;
         m_updateMessage = tr("当前已是最新版本。");
+        if (channel.fresh)
+            m_freshChannelAnswered = true;
         Q_EMIT updateStatusChanged();
     });
 }

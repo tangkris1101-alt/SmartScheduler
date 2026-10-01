@@ -31,6 +31,7 @@ namespace {
 
 QMutex g_logMutex;
 QString g_logPath;
+bool g_logToStderr = false; // 冒烟自检时同时打到 stderr，终端/CI 直接看得到链路日志
 
 // 统一日志：写入 AppDataLocation/logs/smartscheduler.log，供设置页导出诊断
 void messageHandler(QtMsgType type, const QMessageLogContext &, const QString &msg)
@@ -43,6 +44,8 @@ void messageHandler(QtMsgType type, const QMessageLogContext &, const QString &m
     case QtCriticalMsg: level = "ERROR"; break;
     case QtFatalMsg: level = "FATAL"; break;
     }
+    if (g_logToStderr)
+        fprintf(stderr, "[%s] %s\n", level, msg.toUtf8().constData());
     QMutexLocker locker(&g_logMutex);
     QFile f(g_logPath);
     if (f.open(QIODevice::Append | QIODevice::Text)) {
@@ -70,6 +73,10 @@ void initLogging()
         QFile touch(g_logPath);
         touch.open(QIODevice::WriteOnly);
     }
+    const QStringList launchArgs = QCoreApplication::arguments();
+    g_logToStderr = std::any_of(launchArgs.cbegin(), launchArgs.cend(), [](const QString &a) {
+        return a.startsWith(QStringLiteral("--smoke="));
+    });
     qInstallMessageHandler(messageHandler);
     qInfo("SmartScheduler %s 启动", APP_VERSION);
 }
@@ -829,6 +836,35 @@ int main(int argc, char *argv[])
                     });
                 });
             });
+    }
+
+    // 回归自检：--smoke=update 只跑「检查更新」（不下载安装包），验证多通道探测能收敛到下结论：
+    // 缓存通道（反代/CDN）可能返回旧版本，必须继续问到实时通道（自建中继 / GitHub API）才罢休。
+    // 0 通过（2=已最新、3=有新版本都算通过），21=检查失败，23=超时
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("update")) {
+        auto *ticks = new int(0);
+        QTimer *timer = new QTimer(&app);
+        QObject::connect(timer, &QTimer::timeout, &app, [&appController, &app, ticks, timer]() {
+            if (++(*ticks) > 60) {
+                timer->stop();
+                fprintf(stderr, "[smoke] smoke-update: 超时\n");
+                app.exit(23);
+                return;
+            }
+            if (*ticks == 1) {
+                appController.checkUpdate();
+                return;
+            }
+            const int us = appController.updateStatus();
+            if (us == 1 || us == 0)
+                return; // 仍在检查
+            timer->stop();
+            fprintf(stderr, "[smoke] smoke-update: status=%d 远端=%s 说明=%s\n", us,
+                    appController.latestVersion().toUtf8().constData(),
+                    appController.updateMessage().toUtf8().constData());
+            app.exit(us == 4 ? 21 : 0);
+        });
+        timer->start(500);
     }
 
     // 回归自检：--smoke=download 真实走「检查更新 → 镜像链下载安装包」全流程。

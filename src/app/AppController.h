@@ -241,6 +241,10 @@ public:
     QString updateDlMessage() const { return m_updateDlMessage; }
     QString logFilePath() const;
 
+    // 版本号比较与「本次探测是否可信」的判定，抽成静态纯函数便于单测
+    static int compareVersions(const QString &a, const QString &b);
+    static bool updateProbeConclusive(const QString &tag, const QString &current, bool freshChannel);
+
     Q_INVOKABLE void checkUpdate();
     void checkUpdateSilently(); // 定时/启动静默检查：不显示「检查中」，发现新版本自动下载
     Q_INVOKABLE void openReleasesPage();
@@ -253,8 +257,6 @@ public:
     // 私有实现：interactive=true 时显示「检查中」状态（手动点击），false 为静默检查
     void checkUpdate(bool interactive);
 
-    // 语义化版本比较：忽略 v/V 前缀，按 . 分段数值比较；a>b 返回 1，相等 0，a<b 返回 -1
-    static int compareVersions(const QString &a, const QString &b);
     // 生成更新用批处理内容：延迟等本程序退出后静默拉起安装包（独立成静态函数便于测试）
     static QString updateBatchContent(const QString &setupPath);
 
@@ -380,14 +382,22 @@ private:
     int m_updateStatus = 0;
     QString m_latestVersion;
     QString m_updateMessage;
-    QString m_olderTag;         // 所有通道都返回旧版本时记下「已发布的最新版」，避免误报检查失败
-    QString m_olderSetup;       // 与之配套的安装包文件名 / 校验值（通道间版本可能不一致）
-    QString m_olderSha256;
-    qint64 m_olderSize = 0;
-    QString m_latestSetup;      // 最新版安装包文件名（镜像下载拼 URL 用）
-    QStringList m_updateSources; // 更新检查通道（按国内可达性排序，逐个回退）
+    QString m_probeTag;    // 探测中见过的不比当前新的最高版本（所有通道都没给出更新版本时用它兜底展示）
+    QString m_probeSetup;  // 与之配套的安装包文件名 / 校验值（通道间版本可能不一致）
+    QString m_probeSha256;
+    qint64 m_probeSize = 0;
+    QString m_latestSetup; // 最新版安装包文件名（镜像下载拼 URL 用）
+    // 更新检查通道：fresh=true 表示结果实时可信（自建中继直连 GitHub API、GitHub API 自身），
+    // 拿到「不比当前新」即可据此定论；第三方反代与 CDN 会缓存 version.json，只能当补充探测。
+    struct UpdateChannel {
+        QString url;
+        bool fresh = false;
+    };
+    QVector<UpdateChannel> m_updateChannels; // 按国内可达性 + 实时性排序，逐个回退
     int m_updateAttempt = 0;
+    bool m_freshChannelAnswered = false; // 本轮是否有实时通道给出了结论
     void tryUpdateSource();
+    void finishUpdateProbe(); // 通道全部问完的收尾（兜底「已是最新」或报失败）
 
     // 自动更新：下载 → 校验 → 静默安装
     int m_updateDlState = 0;

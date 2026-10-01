@@ -1814,6 +1814,15 @@ void TestApp::versionAndUpdate()
     QCOMPARE(AppController::compareVersions(QStringLiteral("2.0.0"), QStringLiteral("1.9.9")), 1);
     QCOMPARE(AppController::compareVersions(QStringLiteral("V1.2"), QStringLiteral("1.2.0")), 0);
 
+    // 通道探测的定论规则（v1.0.37→v1.0.38 那个「检查不到新版本」的根因）：
+    // 缓存通道说「不比当前新」不可信，必须继续问实时通道；实时通道才可定论
+    QVERIFY(!AppController::updateProbeConclusive(QStringLiteral("v1.0.37"), QStringLiteral("1.0.37"), false));
+    QVERIFY(!AppController::updateProbeConclusive(QStringLiteral("v1.0.36"), QStringLiteral("1.0.37"), false));
+    QVERIFY(AppController::updateProbeConclusive(QStringLiteral("v1.0.38"), QStringLiteral("1.0.37"), false));
+    QVERIFY(AppController::updateProbeConclusive(QStringLiteral("v1.0.37"), QStringLiteral("1.0.37"), true));
+    QVERIFY(AppController::updateProbeConclusive(QStringLiteral("v1.0.36"), QStringLiteral("1.0.37"), true));
+    QVERIFY(AppController::updateProbeConclusive(QStringLiteral("v1.0.38"), QStringLiteral("1.0.37"), true));
+
     AppController app;
     QVERIFY(!app.appVersion().isEmpty());
     QVERIFY(!app.qtVersion().isEmpty());
