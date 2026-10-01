@@ -81,6 +81,90 @@ function audit(record) {
     }
 }
 
+// ---------------------------------------------------------------- 版本检查
+// 桌面端「检查更新」的首选通道：自建域名国内直连，数据直接取自公开仓的 GitHub API。
+// 第三方反代与 jsDelivr 都会缓存 version.json（发版后数分钟仍返回旧版本，客户端据此
+// 误判「已是最新」），所以这里用短 TTL + 手动检查强制刷新把窗口压到最小。
+const cfgVersion = {
+    api: process.env.VERSION_API
+        || 'https://api.github.com/repos/tangkris1101-alt/SmartScheduler-Releases/releases/latest',
+    ttlMs: Number(process.env.VERSION_TTL_MS || 60000),
+    forceMinMs: Number(process.env.VERSION_FORCE_MIN_MS || 15000),
+    ipWindowMs: 300000,
+    ipMaxRequests: 30,
+};
+let versionCache = { at: 0, payload: null, lastForce: 0 };
+const versionHits = new Map();
+
+function countVersionIp(ip) {
+    const now = Date.now();
+    const hits = (versionHits.get(ip) || []).filter((t) => now - t < cfgVersion.ipWindowMs);
+    hits.push(now);
+    versionHits.set(ip, hits);
+    if (versionHits.size > 5000) {
+        for (const [k, v] of versionHits)
+            if (!v.some((t) => now - t < cfgVersion.ipWindowMs))
+                versionHits.delete(k);
+    }
+    return hits.length;
+}
+
+// release 的资产里优先取安装包（setup 优先，其次是便携包外的任意 exe）
+function pickSetupAsset(assets) {
+    const list = Array.isArray(assets) ? assets : [];
+    return list.find((a) => /-setup\.exe$/i.test(a.name || ''))
+        || list.find((a) => /\.exe$/i.test(a.name || ''))
+        || null;
+}
+
+async function fetchUpstreamVersion() {
+    const res = await fetch(cfgVersion.api, {
+        headers: { accept: 'application/vnd.github+json', 'user-agent': 'SmartScheduler-Relay' },
+        signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok)
+        throw new Error(`GitHub API ${res.status}`);
+    const rel = await res.json();
+    const tag = String(rel.tag_name || '');
+    if (!tag)
+        throw new Error('release 缺少 tag_name');
+    const asset = pickSetupAsset(rel.assets);
+    const digest = String((asset && asset.digest) || '');
+    return {
+        tag,
+        setup: asset ? asset.name : `SmartScheduler-${tag.replace(/^v/, '')}-setup.exe`,
+        size: asset ? Number(asset.size || 0) : 0,
+        sha256: digest.startsWith('sha256:') ? digest.slice(7) : '',
+        publishedAt: String(rel.published_at || ''),
+        notes: String(rel.body || '').slice(0, 400),
+    };
+}
+
+// force=true 时（手动检查）最多每 forceMinMs 向上游要一次，其余情况吃缓存；
+// 上游失败但有旧缓存时降级返回旧值（客户端会看到 cached=true 并继续问其它通道）
+async function versionPayload(force) {
+    const now = Date.now();
+    const age = now - versionCache.at;
+    const usable = versionCache.payload && age < cfgVersion.ttlMs;
+    if (usable && !force)
+        return { ...versionCache.payload, cached: true, ageMs: age };
+    if (force && versionCache.payload && now - versionCache.lastForce < cfgVersion.forceMinMs)
+        return { ...versionCache.payload, cached: true, ageMs: age };
+    if (force || !versionCache.payload)
+        versionCache.lastForce = now;
+    try {
+        const payload = await fetchUpstreamVersion();
+        versionCache = { ...versionCache, at: now, payload };
+        return { ...payload, cached: false, ageMs: 0 };
+    } catch (err) {
+        if (versionCache.payload) {
+            return { ...versionCache.payload, cached: true, ageMs: age,
+                     upstreamError: String(err.message || err) };
+        }
+        throw err;
+    }
+}
+
 // ---------------------------------------------------------------- 入参校验
 function validate(body) {
     if (!body || typeof body !== 'object')
@@ -123,6 +207,24 @@ app.get('/v1/health', (req, res) => {
         dailyTokens: daily.tokens,
         dailyBudget: cfg.dailyTokenBudget,
     });
+});
+
+// 桌面端「检查更新」的首选通道：数据直接来自 GitHub API（详见文件上方 cfgVersion 注释）
+app.get('/v1/version', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?')
+                   .toString().split(',')[0].trim();
+    if (countVersionIp(ip) > cfgVersion.ipMaxRequests)
+        return res.status(429).json({ ok: false, error: 'too_many_requests' });
+    const force = String(req.query.fresh || '') === '1';
+    try {
+        const payload = await versionPayload(force);
+        res.json({ ok: true, ...payload, app: String(req.query.app || '').slice(0, 24) });
+    } catch (err) {
+        // 客户端据此回退到其它通道：这里绝不能返回 200/空 tag，否则会把它钉死在「已是最新」
+        res.status(503).json({ ok: false, error: 'upstream_unavailable',
+                               detail: String(err.message || err) });
+    }
 });
 
 app.post('/v1/ai/orchestrate', async (req, res) => {

@@ -24,8 +24,31 @@ function check(name, cond, extra = '') {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---- 假上游：SSE 返回一段带 tool_calls 与 usage 的数据
+// ---- 假上游：发布接口（版本检查用）+ SSE 返回一段带 tool_calls 与 usage 的数据
+let releaseHits = 0;
+let releaseBroken = false;
+const FAKE_RELEASE = {
+    tag_name: 'v9.9.9',
+    published_at: '2026-01-01T00:00:00Z',
+    body: '假发布说明',
+    assets: [
+        { name: 'SmartScheduler-9.9.9-win64-portable.zip', size: 111, digest: null },
+        { name: 'SmartScheduler-9.9.9-setup.exe', size: 222, digest: 'sha256:abc123' },
+    ],
+};
+
 const upstream = createServer((req, res) => {
+    if (req.url.startsWith('/releases/latest')) {
+        releaseHits++;
+        if (releaseBroken) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end('{"message":"boom"}');
+            return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(FAKE_RELEASE));
+        return;
+    }
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
@@ -72,6 +95,9 @@ async function main() {
             UPSTREAM_BASE: `http://127.0.0.1:${UPSTREAM_PORT}`,
             UPSTREAM_KEY: 'smoke-key',
             IP_MAX_REQUESTS: String(IP_MAX_REQUESTS),
+            VERSION_API: `http://127.0.0.1:${UPSTREAM_PORT}/releases/latest`,
+            VERSION_TTL_MS: '3000',
+            VERSION_FORCE_MIN_MS: '2000',
             LOG_DIR: join(APP_DIR, 'logs'),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -92,6 +118,34 @@ async function main() {
     const health = await (await fetch(`${base}/v1/health`)).json();
     check('health.ok', health.ok === true);
     check('health.upstream', typeof health.upstream === 'string');
+
+    console.log('版本检查通道');
+    const v1 = await (await fetch(`${base}/v1/version?app=1.0.39`)).json();
+    check('version.ok', v1.ok === true, JSON.stringify(v1));
+    check('version.tag', v1.tag === 'v9.9.9', JSON.stringify(v1));
+    check('version.setup 取安装包', v1.setup === 'SmartScheduler-9.9.9-setup.exe', v1.setup);
+    check('version.sha256 来自 digest', v1.sha256 === 'abc123', String(v1.sha256));
+    check('version.size', v1.size === 222, String(v1.size));
+    check('version 首次为回源', v1.cached === false);
+    const hitsAfterFirst = releaseHits;
+    const v2 = await (await fetch(`${base}/v1/version`)).json();
+    check('TTL 内命中缓存', v2.cached === true && releaseHits === hitsAfterFirst,
+          `cached=${v2.cached} hits=${releaseHits}`);
+    const v3 = await (await fetch(`${base}/v1/version?fresh=1`)).json();
+    check('force 有最小间隔，刚取过仍走缓存',
+          v3.cached === true && releaseHits === hitsAfterFirst,
+          `cached=${v3.cached} hits=${releaseHits}`);
+    check('响应禁止中间层缓存', (await fetch(`${base}/v1/version`)).headers
+          .get('cache-control') === 'no-store');
+
+    console.log('版本检查：上游故障降级');
+    releaseBroken = true;
+    await sleep(3200); // 等 TTL 过期，逼一次回源
+    const v4 = await (await fetch(`${base}/v1/version?fresh=1`)).json();
+    check('上游失败时降级返回缓存并带原因',
+          v4.ok === true && v4.tag === 'v9.9.9' && typeof v4.upstreamError === 'string',
+          JSON.stringify(v4));
+    releaseBroken = false;
 
     console.log('鉴权与校验');
     const noToken = await fetch(`${base}/v1/ai/orchestrate`, {
@@ -155,6 +209,42 @@ async function main() {
     relay.kill('SIGTERM');
     upstream.close();
     await sleep(200);
+
+    // 无缓存 + 上游不可用：必须给 503，客户端才会回退到其它通道（返回 200/空 tag 会把它钉死）
+    console.log('版本检查：无缓存且上游不可用');
+    const relay2 = spawn(process.execPath, ['src/index.js'], {
+        cwd: APP_DIR,
+        env: {
+            ...process.env,
+            PORT: String(RELAY_PORT + 1),
+            HOST: '127.0.0.1',
+            APP_TOKEN,
+            UPSTREAM_BASE: `http://127.0.0.1:${UPSTREAM_PORT}`,
+            UPSTREAM_KEY: 'smoke-key',
+            VERSION_API: 'http://127.0.0.1:1/releases/latest',
+            LOG_DIR: join(APP_DIR, 'logs'),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    relay2.stderr.on('data', (d) => process.stderr.write(`[relay2] ${d}`));
+    let up2 = false;
+    for (let i = 0; i < 40; ++i) {
+        try {
+            if ((await fetch(`http://127.0.0.1:${RELAY_PORT + 1}/v1/health`)).ok) {
+                up2 = true;
+                break;
+            }
+        } catch { /* 还没起来 */ }
+        await sleep(150);
+    }
+    check('备用实例已启动', up2);
+    if (up2) {
+        const r503 = await fetch(`http://127.0.0.1:${RELAY_PORT + 1}/v1/version`);
+        check('无缓存且上游不可用 → 503', r503.status === 503, `status=${r503.status}`);
+    }
+    relay2.kill('SIGTERM');
+    await sleep(200);
+
     console.log(failures === 0 ? '\n全部通过' : `\n失败 ${failures} 项`);
     process.exit(failures === 0 ? 0 : 1);
 }
