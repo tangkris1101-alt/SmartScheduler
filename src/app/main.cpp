@@ -867,9 +867,10 @@ int main(int argc, char *argv[])
         timer->start(500);
     }
 
-    // 回归自检：--smoke=download 真实走「检查更新 → 镜像链下载安装包」全流程。
+    // 回归自检：--smoke=download 真实走「检查更新 → 镜像链下载安装包 → 已就绪后点检查」全流程。
     // 版本相等也照下（只验证下载链路本身），文件落在 %TEMP%/SmartScheduler-update。
-    // 0 通过，21=检查更新失败，22=下载失败，23=超时，24=落盘文件异常
+    // 0 通过，21=检查更新失败，22=下载失败，23=超时，24=落盘文件异常，
+    // 25=已就绪状态下点「立即检查」没有反馈（按钮静默无反应）
     if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("download")) {
         auto *stage = new int(0);
         auto *ticks = new int(0);
@@ -905,11 +906,27 @@ int main(int argc, char *argv[])
             const int ds = appController.updateDlState();
             if (ds == 1)
                 return; // 下载中
-            timer->stop();
             if (ds == 3) {
+                timer->stop();
                 qWarning("smoke-download: 下载失败 %s",
                          qPrintable(appController.updateDlMessage()));
                 app.exit(22);
+                return;
+            }
+            if (*stage == 1) {
+                // 已就绪但未安装时手动点「立即检查」：必须给出反馈（曾静默 return，按钮像坏了），
+                // 下一拍核对文案是否指名了已下载的版本
+                *stage = 2;
+                appController.checkUpdate();
+                return;
+            }
+            timer->stop();
+            const QString readyMsg = appController.updateMessage();
+            if (appController.updateStatus() != 2 || readyMsg.isEmpty()
+                || !readyMsg.contains(appController.latestVersion())) {
+                qWarning("smoke-download: 已就绪状态下点检查无有效反馈 status=%d msg=%s",
+                         appController.updateStatus(), qPrintable(readyMsg));
+                app.exit(25);
                 return;
             }
             // ds == 2：验证落盘文件
@@ -918,8 +935,8 @@ int main(int argc, char *argv[])
             qint64 fs = 0;
             if (!exes.isEmpty())
                 fs = QFileInfo(d.filePath(exes.first())).size();
-            qWarning("smoke-download: 就绪，文件=%s 大小=%lld", qPrintable(exes.value(0)),
-                     (long long)fs);
+            qWarning("smoke-download: 就绪，文件=%s 大小=%lld；点检查反馈=「%s」",
+                     qPrintable(exes.value(0)), (long long)fs, qPrintable(readyMsg));
             app.exit(!exes.isEmpty() && fs > 5 * 1024 * 1024 ? 0 : 24);
         });
         timer->start(1000);

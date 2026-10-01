@@ -1837,6 +1837,8 @@ void TestApp::versionAndUpdate()
     QVERIFY(bat.contains(QStringLiteral("ping 127.0.0.1")));
     QVERIFY(bat.contains(QStringLiteral("\r\n")));
     QVERIFY(!bat.contains(QStringLiteral("\\\"")));
+    // 安装完删掉安装包自身，别在 %TEMP% 里越堆越多
+    QVERIFY(bat.contains(QStringLiteral("del /f /q \"C:\\临时 目录\\SmartScheduler-setup.exe\"")));
 }
 
 void TestApp::logExport()

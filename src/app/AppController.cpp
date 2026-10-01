@@ -3038,6 +3038,17 @@ void AppController::downloadUpdate()
     m_updateDlPercent = 0;
     m_updateDlMessage.clear();
     m_downloadedSetup.clear();
+    // 顺手清掉历史版本的安装包：每升一版都会在 %TEMP% 留一份约 30MB，
+    // 实测积累过 580MB（1.0.15~1.0.38 全在），既占磁盘又让「最新安装包」难以辨认
+    QDir updDir(QDir::temp().filePath(QStringLiteral("SmartScheduler-update")));
+    if (updDir.exists()) {
+        const auto stale = updDir.entryList({QStringLiteral("SmartScheduler-*.exe")}, QDir::Files);
+        for (const QString &old : stale)
+            if (old != setup)
+                QFile::remove(updDir.filePath(old));
+        if (!stale.isEmpty())
+            qWarning("自动更新: 清理历史安装包 %lld 份", (long long)stale.size());
+    }
     Q_EMIT updateDlStateChanged();
     tryUpdateDownload();
 }
@@ -3169,10 +3180,12 @@ void AppController::installUpdate()
 
 QString AppController::updateBatchContent(const QString &setupPath)
 {
-    // ping 延迟约 2 秒等本程序退出释放文件锁；Inno 旗标：静默覆盖、不重启、兜底关残留进程
+    // ping 延迟约 2 秒等本程序退出释放文件锁；Inno 旗标：静默覆盖、不重启、兜底关残留进程；
+    // 装完删掉安装包自身（安装器退出后 cmd 才继续，此时文件已可删），避免 %TEMP% 越堆越多
     return QStringLiteral("@echo off\r\n"
                           "ping 127.0.0.1 -n 3 >nul\r\n"
-                          "\"%1\" /VERYSILENT /NORESTART /CLOSEAPPLICATIONS\r\n")
+                          "\"%1\" /VERYSILENT /NORESTART /CLOSEAPPLICATIONS\r\n"
+                          "del /f /q \"%1\" >nul 2>nul\r\n")
         .arg(setupPath);
 }
 
