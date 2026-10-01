@@ -4,7 +4,8 @@
 #include <QStringList>
 
 // 本文件承接「AI 工具扩展」：连堂设置、前 N 节、任课老师、老师日最多课、
-// 按组批量不排，以及对应的只读工具（老师课表）。主文件只保留一个转发钩子。
+// 按组批量不排、同时段组（走班）、合班组，以及对应的只读工具（老师课表）。
+// 主文件只保留一个转发钩子。
 
 namespace {
 
@@ -35,6 +36,11 @@ bool AppController::aiRunReadToolExtra(const QString &tool, const QVariantMap &a
     if (tool == QLatin1StringView("list_time_sync_groups")) {
         *out = QVariantMap{{QStringLiteral("ok"), true},
                            {QStringLiteral("data"), timeSyncGroups()}};
+        return true;
+    }
+    if (tool == QLatin1StringView("list_combined_groups")) {
+        *out = QVariantMap{{QStringLiteral("ok"), true},
+                           {QStringLiteral("data"), combinedGroups()}};
         return true;
     }
     if (tool == QLatin1StringView("query_teacher_schedule")) {
@@ -117,6 +123,25 @@ QVariantList AppController::aiToolSchemasExtra() const
                             {QStringLiteral("description"), tr("组名（可先用 list_time_sync_groups）")}}}},
               {QStringLiteral("name")});
     out << fn(QStringLiteral("list_time_sync_groups"), tr("列出全部同时段组"), {}, {});
+    out << fn(QStringLiteral("create_combined_group"),
+              tr("新建合班组：同一位老师、同一门课的多个班合成一个班一起上课"
+                 "（与「同时段组」不同：合班是真合并成一个班，同时段组只是排在同一节）"),
+              {{QStringLiteral("name"),
+                QVariantMap{{QStringLiteral("type"), QStringLiteral("string")},
+                            {QStringLiteral("description"), tr("组名，如「体育合班」")}}},
+               {QStringLiteral("entries"),
+                QVariantMap{{QStringLiteral("type"), QStringLiteral("array")},
+                            {QStringLiteral("description"),
+                             tr("成员列表 [{className, courseName}]，至少两个；必须同一门课，"
+                                "且各成员要有共同任课老师")}}}},
+              {QStringLiteral("entries")});
+    out << fn(QStringLiteral("remove_combined_group"),
+              tr("删除（解散）合班组，按组名"),
+              {{QStringLiteral("name"),
+                QVariantMap{{QStringLiteral("type"), QStringLiteral("string")},
+                            {QStringLiteral("description"), tr("组名（可先用 list_combined_groups）")}}}},
+              {QStringLiteral("name")});
+    out << fn(QStringLiteral("list_combined_groups"), tr("列出全部合班组"), {}, {});
     out << fn(QStringLiteral("query_teacher_schedule"),
               tr("查看某位老师教哪些班、什么时段（帮你在改之前定位）"),
               {{QStringLiteral("teacherName"),
@@ -460,6 +485,119 @@ bool AppController::planAiOperationExtra(const QString &tool, const QVariantMap 
         return *out = p, true;
     }
 
+    if (tool == QLatin1StringView("create_combined_group")) {
+        p.title = tr("新建合班组");
+        p.groupId = -2; // 标记：新建
+        const QString name = args.value(QStringLiteral("name")).toString().trimmed();
+        int valid = 0;
+        qint64 courseId = -1;
+        bool courseMixed = false;
+        QStringList missing;
+        for (const QVariant &v : args.value(QStringLiteral("entries")).toList()) {
+            const QVariantMap m = v.toMap();
+            const QString cn = m.value(QStringLiteral("className")).toString();
+            const QString co = m.value(QStringLiteral("courseName")).toString();
+            const qint64 cid = matchEntity(m_school.classes, cn);
+            const qint64 coid = matchEntity(m_school.courses, co);
+            if (cid < 0 || coid < 0) {
+                missing << QStringLiteral("%1·%2").arg(cn, co);
+                continue;
+            }
+            if (courseId < 0)
+                courseId = coid;
+            else if (courseId != coid)
+                courseMixed = true;
+            ++valid;
+            p.syncEntries.append(QVariantMap{{QStringLiteral("classId"), cid},
+                                             {QStringLiteral("courseId"), coid}});
+        }
+        if (courseMixed) {
+            p.error = tr("合班组成员必须是同一门课（同时段组才允许不同课程）");
+            return *out = p, true;
+        }
+        if (valid < 2) {
+            p.error = tr("至少需要两个有效的「班级·课程」成员");
+            return *out = p, true;
+        }
+        // 与界面同一套校验：后加入的成员必须与已有成员共享至少一位任课老师
+        const auto entryOf = [this](qint64 classId, qint64 courseId) -> const sched::PlanEntry * {
+            for (const auto &e : m_school.planEntries) {
+                if (e.classId == classId && e.courseId == courseId)
+                    return &e;
+            }
+            return nullptr;
+        };
+        QStringList noShared;
+        for (int i = 1; i < p.syncEntries.size(); ++i) {
+            const QVariantMap cur = p.syncEntries[i].toMap();
+            const qint64 curClass = cur.value(QStringLiteral("classId")).toLongLong();
+            const sched::PlanEntry *ce = entryOf(curClass, courseId);
+            bool shared = false;
+            for (int j = 0; j < i && !shared; ++j) {
+                const QVariantMap prev = p.syncEntries[j].toMap();
+                const sched::PlanEntry *pe = entryOf(prev.value(QStringLiteral("classId")).toLongLong(),
+                                                     courseId);
+                if (!ce || !pe)
+                    continue;
+                for (qint64 t : ce->teacherIds) {
+                    if (pe->teacherIds.contains(t)) {
+                        shared = true;
+                        break;
+                    }
+                }
+            }
+            if (!shared) {
+                const sched::ClassInfo *c = m_school.findClass(curClass);
+                noShared << (c ? c->name : QString::number(curClass));
+            }
+        }
+        if (!noShared.isEmpty()) {
+            p.error = tr("这些班与组内其它成员没有共同的任课老师：%1")
+                          .arg(noShared.join(QStringLiteral("、")));
+            return *out = p, true;
+        }
+        p.changes = valid;
+        p.groupName = name;
+        for (const QVariant &v : p.syncEntries) {
+            if (p.details.size() >= 20)
+                break;
+            const sched::ClassInfo *c = m_school.findClass(v.toMap().value(QStringLiteral("classId")).toLongLong());
+            p.details.append(tr("%1 的「%2」并入合班组")
+                                 .arg(c ? c->name : QString(),
+                                      courseNameOf(courseId)));
+        }
+        p.summary = tr("新建合班组「%1」：%2 个班合成一个班上「%3」")
+                        .arg(name.isEmpty() ? tr("合班组") : name)
+                        .arg(valid)
+                        .arg(courseNameOf(courseId));
+        if (!missing.isEmpty())
+            p.warnings.append(tr("以下成员未找到，将被忽略：%1").arg(missing.join(QStringLiteral("、"))));
+        p.valid = true;
+        return *out = p, true;
+    }
+
+    if (tool == QLatin1StringView("remove_combined_group")) {
+        p.title = tr("解散合班组");
+        const QString name = args.value(QStringLiteral("name")).toString();
+        for (const auto &g : m_school.combinedGroups) {
+            if (g.name == name || g.name.contains(name, Qt::CaseInsensitive)) {
+                p.groupId = g.id;
+                break;
+            }
+        }
+        if (p.groupId < 0) {
+            p.error = tr("找不到合班组：%1（可先用 list_combined_groups）").arg(name);
+            return *out = p, true;
+        }
+        const sched::CombinedGroup *g = m_school.findCombinedGroup(p.groupId);
+        p.changes = g ? g->entries.size() : 0;
+        p.summary = tr("解散合班组「%1」（%2 个成员恢复为各班单独上课）")
+                        .arg(g ? g->name : name)
+                        .arg(p.changes);
+        p.valid = true;
+        return *out = p, true;
+    }
+
     if (tool == QLatin1StringView("create_time_sync_group")) {
         p.title = tr("新建同时段组（走班）");
         p.groupId = -2; // 标记：新建
@@ -537,6 +675,18 @@ bool AppController::applyAiOperationExtra(const QString &tool, const AiOpPlan &p
     } else if (tool == QLatin1StringView("set_teacher_daily_max")) {
         r = batchSetTeacherDailyMaxImpl(p.entityIds, p.dailyMax);
         r.insert(QStringLiteral("changed"), r.value(QStringLiteral("updated")).toInt() > 0);
+    } else if (tool == QLatin1StringView("create_combined_group")) {
+        const qint64 id = createCombinedGroupByIds(p.groupName, p.syncEntries);
+        r = QVariantMap{{QStringLiteral("created"), id >= 0 ? 1 : 0},
+                        {QStringLiteral("changed"), id >= 0}};
+        *out = r;
+        return true;
+    } else if (tool == QLatin1StringView("remove_combined_group")) {
+        const bool ok = removeCombinedGroup(p.groupId);
+        r = QVariantMap{{QStringLiteral("removed"), ok ? 1 : 0},
+                        {QStringLiteral("changed"), ok}};
+        *out = r;
+        return true;
     } else if (tool == QLatin1StringView("create_time_sync_group")) {
         const qint64 id = createTimeSyncGroupByIds(p.groupName, p.syncEntries);
         r = QVariantMap{{QStringLiteral("created"), id >= 0 ? 1 : 0},
@@ -846,6 +996,85 @@ bool AppController::removeTimeSyncGroup(qint64 id)
     cancelScheduler();
     makeBatchBackup(tr("删除同时段组"));
     if (!m_school.removeTimeSyncGroup(id)) {
+        discardBatchBackup();
+        return false;
+    }
+    markDirty();
+    Q_EMIT projectChanged();
+    return true;
+}
+
+// ---------------------------------------------------------------- 合班组
+QVariantList AppController::combinedGroups() const
+{
+    QVariantList out;
+    for (const auto &g : m_school.combinedGroups) {
+        QVariantList entries;
+        for (const auto &e : g.entries) {
+            const sched::ClassInfo *c = m_school.findClass(e.first);
+            const sched::Course *co = m_school.findCourse(e.second);
+            entries.append(QVariantMap{{QStringLiteral("className"), c ? c->name : QString()},
+                                       {QStringLiteral("courseName"), co ? co->name : QString()}});
+        }
+        out.append(QVariantMap{{QStringLiteral("id"), g.id},
+                               {QStringLiteral("name"), g.name},
+                               {QStringLiteral("entries"), entries}});
+    }
+    return out;
+}
+
+qint64 AppController::createCombinedGroup(const QString &name, const QVariantList &entries)
+{
+    QVariantList ids;
+    for (const QVariant &v : entries) {
+        const QVariantMap m = v.toMap();
+        const qint64 cid = matchEntity(m_school.classes, m.value(QStringLiteral("className")).toString());
+        const qint64 coid = matchEntity(m_school.courses, m.value(QStringLiteral("courseName")).toString());
+        if (cid >= 0 && coid >= 0)
+            ids.append(QVariantMap{{QStringLiteral("classId"), cid},
+                                   {QStringLiteral("courseId"), coid}});
+    }
+    return createCombinedGroupByIds(name, ids);
+}
+
+qint64 AppController::createCombinedGroupByIds(const QString &name, const QVariantList &idPairs)
+{
+    if (!m_hasProject)
+        return -1;
+    sched::CombinedGroup g;
+    g.name = name.trimmed().isEmpty() ? tr("合班组") : name.trimmed();
+    for (const QVariant &v : idPairs) {
+        const QVariantMap m = v.toMap();
+        const qint64 cid = m.value(QStringLiteral("classId")).toLongLong();
+        const qint64 coid = m.value(QStringLiteral("courseId")).toLongLong();
+        if (cid < 0 || coid < 0)
+            continue;
+        const QPair<qint64, qint64> pair{cid, coid};
+        if (!g.entries.contains(pair))
+            g.entries.append(pair);
+    }
+    // 合班 = 同一门课合并成一个班；课程不一致是数据错误，宁可拒绝
+    if (g.entries.size() < 2)
+        return -1;
+    for (const auto &e : g.entries) {
+        if (e.second != g.entries.first().second)
+            return -1;
+    }
+    cancelScheduler();
+    makeBatchBackup(tr("新建合班组"));
+    const qint64 id = m_school.addCombinedGroup(g);
+    markDirty();
+    Q_EMIT projectChanged();
+    return id;
+}
+
+bool AppController::removeCombinedGroup(qint64 id)
+{
+    if (id < 0)
+        return false;
+    cancelScheduler();
+    makeBatchBackup(tr("解散合班组"));
+    if (!m_school.removeCombinedGroup(id)) {
         discardBatchBackup();
         return false;
     }

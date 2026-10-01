@@ -8,6 +8,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QSettings>
 #include <QSignalSpy>
@@ -45,6 +46,7 @@ private Q_SLOTS:
     void aiToolLayer();
     void aiToolsExtended();
     void aiTimeSyncTools();
+    void aiCombinedGroupTools();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -1126,6 +1128,81 @@ void TestApp::aiTimeSyncTools()
     QCOMPARE(app.school()->timeSyncGroups.size(), 0);
 }
 
+void TestApp::aiCombinedGroupTools()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+
+    const auto addPlan = [&](qint64 classId, qint64 teacherId) {
+        sched::PlanEntry e;
+        e.classId = classId;
+        e.courseId = ids.yuwen;
+        e.weeklyPeriods = 2;
+        if (teacherId >= 0)
+            e.teacherIds = {teacherId};
+        return app.school()->addPlanEntry(e);
+    };
+    addPlan(ids.class1, ids.tZhang);
+    const qint64 e2 = addPlan(ids.class2, ids.tWang);
+
+    // 合班 = 同一个班上同一门课：课程不一致必须拒绝
+    const QVariantMap mixed = app.aiDescribe(
+        QStringLiteral("create_combined_group"),
+        {{QStringLiteral("name"), QStringLiteral("错组合")},
+         {QStringLiteral("entries"),
+          QVariantList{QVariantMap{{QStringLiteral("className"), QStringLiteral("1班")},
+                                   {QStringLiteral("courseName"), QStringLiteral("语文")}},
+                       QVariantMap{{QStringLiteral("className"), QStringLiteral("2班")},
+                                   {QStringLiteral("courseName"), QStringLiteral("数学")}}}}});
+    QCOMPARE(mixed.value(QStringLiteral("ok")).toBool(), false);
+
+    const QVariantList entries{QVariantMap{{QStringLiteral("className"), QStringLiteral("1班")},
+                                           {QStringLiteral("courseName"), QStringLiteral("语文")}},
+                               QVariantMap{{QStringLiteral("className"), QStringLiteral("2班")},
+                                           {QStringLiteral("courseName"), QStringLiteral("语文")}}};
+
+    // 与界面同一套校验：1班张、2班王没有共同任课老师 → 拒绝
+    const QVariantMap noShare = app.aiDescribe(
+        QStringLiteral("create_combined_group"),
+        {{QStringLiteral("name"), QStringLiteral("合班")}, {QStringLiteral("entries"), entries}});
+    QCOMPARE(noShare.value(QStringLiteral("ok")).toBool(), false);
+
+    // 改成同一位老师（张）后可以建组
+    app.school()->findPlanEntry(e2)->teacherIds = {ids.tZhang};
+    const QVariantMap dry = app.aiDescribe(
+        QStringLiteral("create_combined_group"),
+        {{QStringLiteral("name"), QStringLiteral("合班")}, {QStringLiteral("entries"), entries}});
+    QCOMPARE(dry.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(dry.value(QStringLiteral("changes")).toInt(), 2);
+
+    const QVariantMap applied = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("create_combined_group")},
+                     {QStringLiteral("args"),
+                      QVariantMap{{QStringLiteral("name"), QStringLiteral("合班")},
+                                  {QStringLiteral("entries"), entries}}}}});
+    QCOMPARE(applied.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->combinedGroups.size(), 1);
+    QCOMPARE(app.school()->combinedGroups.first().entries.size(), 2);
+
+    // 只读：列合班组
+    const QVariantMap listed = app.aiRunReadTool(QStringLiteral("list_combined_groups"), {});
+    QCOMPARE(listed.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(listed.value(QStringLiteral("data")).toList().size(), 1);
+
+    // 撤销覆盖合班组
+    QVERIFY(app.undoLastBatch());
+    QCOMPARE(app.school()->combinedGroups.size(), 0);
+
+    // 解散工具：先建后删
+    app.createCombinedGroup(QStringLiteral("合班"), entries);
+    QCOMPARE(app.school()->combinedGroups.size(), 1);
+    const QVariantMap removed = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("remove_combined_group")},
+                     {QStringLiteral("args"), QVariantMap{{QStringLiteral("name"), QStringLiteral("合班")}}}}});
+    QCOMPARE(removed.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->combinedGroups.size(), 0);
+}
+
 void TestApp::schedulerBridge()
 {
     AppController app;
@@ -1579,7 +1656,15 @@ void TestApp::sampleSchool()
     QVERIFY2(spy.wait(60000), "示例学校排课未在 60s 内完成");
     QVERIFY(!app.resultPending()); // 已自动应用
     QVERIFY(app.hasSchedule());
-    QCOMPARE(app.schedulerReport().value(QStringLiteral("hardViolations")).toInt(), 0);
+    // 失败时把报告带出来：硬违例可能来自「没排上」或「撞课」，两者修法完全不同
+    const QVariantMap rep = app.schedulerReport();
+    QVERIFY2(rep.value(QStringLiteral("hardViolations")).toInt() == 0,
+             qPrintable(QStringLiteral("硬违例 %1 处｜已排 %2/%3｜未排明细 %4")
+                            .arg(rep.value(QStringLiteral("hardViolations")).toInt())
+                            .arg(rep.value(QStringLiteral("placedSessions")).toInt())
+                            .arg(rep.value(QStringLiteral("totalSessions")).toInt())
+                            .arg(QString::fromUtf8(QJsonDocument::fromVariant(rep.value(QStringLiteral("unplaced")))
+                                                       .toJson(QJsonDocument::Compact)))));
     // 预排未被移动
     QCOMPARE(s->schedule.courseAt(s->classes.first().id, 4 * 7, 0).value_or(-1),
              s->courses[9].id); // 体育

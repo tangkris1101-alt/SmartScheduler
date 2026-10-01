@@ -14,6 +14,9 @@ struct EngineOptions {
     quint32 seed = 0;             // 随机种子；相同 输入+seed 结果可复现
     bool randomSeed = false;      // true 时忽略 seed，每次运行随机取种（多次实验用）
     bool placeAll = true;         // 无可行位置的会话也以最小冲突放入（true），否则记为未排
+    // 一轮跑完仍有硬违例时的额外重试轮数：换随机起点重跑，取违例最少者。
+    // 只在这一轮没清零时才付出代价，正常情况零开销。
+    int hardRetries = 2;
 };
 
 // 排课质量报告

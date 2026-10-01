@@ -924,6 +924,7 @@ void AppController::makeBatchBackup(const QString &label)
     m_batchBackup.planEntries = m_school.planEntries;
     m_batchBackup.schedule = m_school.schedule;
     m_batchBackup.timeSyncGroups = m_school.timeSyncGroups;
+    m_batchBackup.combinedGroups = m_school.combinedGroups;
     m_batchBackup.label = label;
     m_hasBatchBackup = true;
 }
@@ -944,6 +945,7 @@ bool AppController::undoLastBatch()
     m_school.planEntries = m_batchBackup.planEntries;
     m_school.schedule = m_batchBackup.schedule;
     m_school.timeSyncGroups = m_batchBackup.timeSyncGroups;
+    m_school.combinedGroups = m_batchBackup.combinedGroups;
     discardBatchBackup();
     markDirty();
     Q_EMIT projectChanged();

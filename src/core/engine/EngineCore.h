@@ -121,7 +121,10 @@ public:
 private:
     void placeFixed();
     void greedy();
-    void minConflicts();
+    void minConflicts(long budget);
+    void attempt(long budget); // 一轮完整求解：固定预排 + 贪心 + 最小冲突
+    void clearPlacements();
+    void restoreBest();
     double localCost(int s); // s 当前位置参与的 硬*权重+软
     void tryUpdateBest();
 

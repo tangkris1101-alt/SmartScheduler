@@ -116,6 +116,11 @@ public:
     Q_INVOKABLE qint64 createTimeSyncGroup(const QString &name, const QVariantList &entries);
     Q_INVOKABLE bool removeTimeSyncGroup(qint64 id);
     qint64 createTimeSyncGroupByIds(const QString &name, const QVariantList &idPairs);
+    // ---- 合班组（同一位老师、同一门课的多个班一起上）----
+    Q_INVOKABLE QVariantList combinedGroups() const;
+    Q_INVOKABLE qint64 createCombinedGroup(const QString &name, const QVariantList &entries);
+    Q_INVOKABLE bool removeCombinedGroup(qint64 id);
+    qint64 createCombinedGroupByIds(const QString &name, const QVariantList &idPairs);
 
     // ---- 批量操作（一次设置/清除，支持整体撤销；对象集合由界面传入）----
     Q_INVOKABLE QVariantList groupMemberIds(qint64 groupId) const; // 组成员 id（按教研组批量勾选用）
@@ -338,6 +343,7 @@ private:
         QVector<sched::PlanEntry> planEntries;
         sched::Schedule schedule; // AI 调课也要能一并撤销
         QVector<sched::TimeSyncGroup> timeSyncGroups;
+        QVector<sched::CombinedGroup> combinedGroups;
         QString label;
     };
     void makeBatchBackup(const QString &label);

@@ -1017,9 +1017,9 @@ double Solver::localCost(int s)
     return HARD_WEIGHT * hard + m_p.localSoft(s);
 }
 
-void Solver::minConflicts()
+void Solver::minConflicts(long budget)
 {
-    for (long it = 0; it < m_opt.maxIterationsPerRun; ++it) {
+    for (long it = 0; it < budget; ++it) {
         if ((it & 0x3F) == 0 && m_cancel && m_cancel->load())
             break;
         if (m_iterCounter)
@@ -1114,15 +1114,38 @@ void Solver::tryUpdateBest()
 
 void Solver::run()
 {
+    attempt(m_opt.maxIterationsPerRun);
+    // 一轮跑完仍有硬违例（实测偶发：198/198 全排上、却留下 1 处撞课）时换随机起点再来，
+    // 取违例最少者。只在没清零时才付代价，正常情况下不增加任何开销。
+    for (int retry = 0; retry < std::max(0, m_opt.hardRetries) && m_bestHard > 0; ++retry) {
+        if (m_cancel && m_cancel->load())
+            break;
+        clearPlacements();
+        attempt(std::max<long>(2000, m_opt.maxIterationsPerRun / 2));
+    }
+    restoreBest();
+}
+
+void Solver::attempt(long budget)
+{
     placeFixed();
     greedy();
     m_curHard = m_p.hardViolations();
     m_curSoft = m_p.softScore();
     tryUpdateBest();
-    minConflicts();
-    // 还原最优快照
+    minConflicts(budget);
+}
+
+// 清空全部落位（固定预排的 fixed 标记保留，下一轮 placeFixed 会重新钉回去）
+void Solver::clearPlacements()
+{
     for (int s = 0; s < m_p.sessions.size(); ++s)
         m_p.remove(s);
+}
+
+void Solver::restoreBest()
+{
+    clearPlacements();
     for (int s = 0; s < m_p.sessions.size(); ++s) {
         if (m_p.placements[s].slot >= 0)
             continue; // 已随同时段组落位
