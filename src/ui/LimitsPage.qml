@@ -120,6 +120,8 @@ Item {
                 spacing: Theme.spacingXS
 
                 Text {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 0 // 不参与隐式宽度，换行由可用宽度决定
                     text: qsTr("这里设置的是「硬规定」（不许破）")
                     color: Theme.text
                     font.pixelSize: Theme.fontBody
@@ -127,15 +129,17 @@ Item {
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("不排时间 / 固定预排 / 老师活动时间：系统排课时必须遵守，违反会直接体现在「质量报告」的硬指标里。"
-                               + "想按年级整体设置作息（如高三周六加课、小学每天少一节），用「按年级组批量设置…」。")
+                    Layout.preferredWidth: 0
+                    text: qsTr("不排时间 / 固定预排 / 老师活动：排课必须遵守，违反会计入「质量报告」的硬指标。"
+                               + "要按年级整体设作息（如高三周六加课），用「按年级组批量设置…」。")
                     color: Theme.textSecondary
                     font.pixelSize: Theme.fontCaption
                     wrapMode: Text.WordWrap
                 }
                 Text {
                     Layout.fillWidth: true
-                    text: qsTr("另外两档供理解：「可以让，但要人点头」= 手工微调；「尽量」= 质量报告的软指标与老师五项，用来挑更好的方案。")
+                    Layout.preferredWidth: 0
+                    text: qsTr("另外两档：「可以让，但要人点头」= 手工微调；「尽量」= 软指标，用来挑更好的方案。")
                     color: Theme.textDisabled
                     font.pixelSize: Theme.fontCaption
                     wrapMode: Text.WordWrap
@@ -216,7 +220,13 @@ Item {
                         onClicked: batchNoScheduleDialog.openDialog()
                     }
                     Item { Layout.fillWidth: true }
+                    // 说明文字不参与隐式宽度：否则它的整行宽度会把整页顶宽，窄窗口下连同课表一起被裁
                     Text {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 0
+                        horizontalAlignment: Text.AlignRight
+                        maximumLineCount: 1
+                        elide: Text.ElideRight
                         text: qsTr("点击单元格切换；点星期/节次表头可整列/整行切换")
                         color: Theme.textDisabled
                         font.pixelSize: Theme.fontCaption
@@ -355,8 +365,13 @@ Item {
 
                     Item { Layout.fillWidth: true }
                     Text {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 0 // 同上：不让说明文字把整页顶宽
+                        horizontalAlignment: Text.AlignRight
+                        maximumLineCount: 1
+                        elide: Text.ElideRight
                         text: root.preMode === 0
-                              ? qsTr("选中课程与半周后点击格子预排；点已预排格取消。两门课分别用「单周」「双周」即可共用同一格")
+                              ? qsTr("选中课程与半周后点击格子预排；点已预排格取消")
                               : qsTr("选中活动课程后点击格子登记活动；再次点击取消")
                         color: Theme.textDisabled
                         font.pixelSize: Theme.fontCaption

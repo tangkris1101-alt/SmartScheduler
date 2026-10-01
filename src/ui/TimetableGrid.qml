@@ -138,6 +138,7 @@ Item {
                             required property int index
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            Layout.minimumWidth: 56 // 窄窗口下的可读下限，再宽则由可用宽度平分
                             Layout.minimumHeight: 34
                             radius: Theme.radiusS
 

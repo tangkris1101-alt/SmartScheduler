@@ -22,7 +22,7 @@ const cfg = {
     appToken: process.env.APP_TOKEN || '',
     upstreamBase: process.env.UPSTREAM_BASE || 'https://api.deepseek.com',
     upstreamKey: process.env.UPSTREAM_KEY || '',
-    defaultModel: process.env.DEFAULT_MODEL || 'deepseek-chat',
+    defaultModel: process.env.DEFAULT_MODEL || 'deepseek-flash',
     maxTokensCap: Number(process.env.MAX_TOKENS_CAP || 4096),
     defaultMaxTokens: Number(process.env.DEFAULT_MAX_TOKENS || 1024),
     dailyTokenBudget: Number(process.env.DAILY_TOKEN_BUDGET || 2000000),
