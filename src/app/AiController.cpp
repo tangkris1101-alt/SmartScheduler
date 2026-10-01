@@ -13,7 +13,10 @@
 #include <QUrl>
 
 namespace {
-constexpr int kMaxRounds = 4;        // 一次提问最多几轮工具调用
+// 不限制一次提问的工具调用轮数：复杂需求（如「逐班查一遍教学计划」）动辄几十轮，
+// 之前卡在 4 轮会让 AI 半途停住。改为只防「空转」——连续几轮要调的工具与参数完全相同才停，
+// 用户也随时可以点「取消」。
+constexpr int kSameToolRounds = 3;   // 连续几轮工具调用完全一致即判空转
 constexpr int kMaxPending = 20;      // 单轮最多挂起多少条变更（与设计约定一致）
 const char *kDefaultRelay = "https://api.class.feimsg.cn";
 // 应用令牌（应用级，可轮换；服务端 .env 中为 APP_TOKEN）
@@ -131,6 +134,8 @@ void AiController::sendPrompt(const QString &text)
     appendTranscript(QStringLiteral("user"), prompt);
     m_lastError.clear();
     m_round = 0;
+    m_lastToolSig.clear();
+    m_sameToolRounds = 0;
     m_pending.clear();
     Q_EMIT pendingChanged();
     postToRelay();
@@ -155,13 +160,6 @@ void AiController::clearTranscript()
 
 void AiController::postToRelay()
 {
-    if (m_round++ >= kMaxRounds) {
-        m_busy = false;
-        appendTranscript(QStringLiteral("assistant"),
-                         tr("（已达单次对话的工具调用上限，先按上面的待办确认吧）"));
-        Q_EMIT stateChanged();
-        return;
-    }
     // 工具清单随请求下发：客户端加工具不需要改服务端
     QVariantList tools;
     for (const QVariant &v : m_app->aiTools()) {
@@ -272,6 +270,33 @@ void AiController::finishRound()
         Q_EMIT streamTextChanged();
         Q_EMIT stateChanged();
         return;
+    }
+
+    // 空转保护：连着几轮要调的工具与参数一字不差，说明模型在原地打转（正常逐班查询的参数各不相同）
+    {
+        QStringList sig;
+        for (auto it = m_toolBuf.begin(); it != m_toolBuf.end(); ++it) {
+            const QVariantMap tc = it.value();
+            sig << tc.value(QStringLiteral("name")).toString() + QLatin1Char('|')
+                       + tc.value(QStringLiteral("args")).toString();
+        }
+        sig.sort();
+        const QString joined = sig.join(QLatin1Char('\n'));
+        if (joined == m_lastToolSig && !joined.isEmpty())
+            ++m_sameToolRounds;
+        else
+            m_sameToolRounds = 0;
+        m_lastToolSig = joined;
+        if (m_sameToolRounds >= kSameToolRounds) {
+            appendTranscript(QStringLiteral("assistant"),
+                             tr("（连续几轮都在重复同一个工具调用，我先停一下。"
+                                "你可以把需求说得更具体些，或先确认上面的待办）"));
+            m_streamText.clear();
+            m_busy = false;
+            Q_EMIT streamTextChanged();
+            Q_EMIT stateChanged();
+            return;
+        }
     }
 
     QVariantList toolCallsForMessage;

@@ -82,4 +82,6 @@ private:
     QByteArray m_sseBuffer;
     bool m_busy = false;
     int m_round = 0;
+    QString m_lastToolSig;        // 上一轮工具调用签名（name|args 排序拼接），用于空转保护
+    int m_sameToolRounds = 0;     // 连续相同轮数
 };
