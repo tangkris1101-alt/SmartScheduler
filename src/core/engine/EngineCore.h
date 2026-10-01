@@ -25,6 +25,9 @@ struct Session {
     bool fixed = false;           // 预排固定，不可移动
     int fixedSlot = -1;           // 预排的起始 slot
     int fixedHalf = 0;            // 预排占用的半周（0 整节 / 1 单周 / 2 双周）
+    // 不计课时、不挂老师（如第 9 节体育活动）：不占老师、不产生老师撞课，
+    // 也不受老师「不排时间」与互斥组约束；班级维度的占用照旧
+    bool noLoad = false;
 };
 
 struct Placement {

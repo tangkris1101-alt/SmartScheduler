@@ -11,7 +11,7 @@ namespace sched {
 
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 // 具名名单公共列（id,name,long_name,short_name,code,priority,remark）的读写辅助
 
 // null QString 会被绑定为 SQL NULL，违反 NOT NULL；统一转为空串
@@ -115,6 +115,12 @@ bool ProjectStore::open(const QString &path)
 // 旧工程升级：按版本逐级补列/改数据
 bool ProjectStore::migrate(int fromVersion)
 {
+    if (fromVersion < 5) {
+        // 计划的「不计课时、不挂老师」（如高中第 9 节体育活动）
+        if (!exec(QStringLiteral(
+                "ALTER TABLE plan_entries ADD COLUMN no_load INTEGER NOT NULL DEFAULT 0")))
+            return false;
+    }
     if (fromVersion < 4) {
         // 同时段组（走班）：两张新表
         const char *ddl4[] = {
@@ -205,7 +211,8 @@ bool ProjectStore::createSchema()
         " is_combined INTEGER NOT NULL DEFAULT 0, classroom_id INTEGER NOT NULL DEFAULT -1,"
         " start_week INTEGER NOT NULL DEFAULT 1, end_week INTEGER NOT NULL DEFAULT 0,"
         " sync_course_id INTEGER NOT NULL DEFAULT -1,"
-        " progress_group INTEGER NOT NULL DEFAULT -1)",
+        " progress_group INTEGER NOT NULL DEFAULT -1,"
+        " no_load INTEGER NOT NULL DEFAULT 0)",
         "CREATE TABLE plan_entry_teachers("
         " entry_id INTEGER NOT NULL REFERENCES plan_entries(id) ON DELETE CASCADE,"
         " teacher_id INTEGER NOT NULL, PRIMARY KEY(entry_id, teacher_id))",
@@ -438,8 +445,8 @@ bool ProjectStore::save(const School &school)
         if (!qe.prepare(QStringLiteral(
                 "INSERT INTO plan_entries(id,class_id,course_id,weekly_periods,chained_count,"
                 " chain_length,morning_periods,early_periods,is_combined,classroom_id,start_week,"
-                " end_week,sync_course_id,progress_group)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"))
+                " end_week,sync_course_id,progress_group,no_load)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"))
             || !qt.prepare(QStringLiteral(
                    "INSERT INTO plan_entry_teachers(entry_id,teacher_id) VALUES(?,?)"))) {
             rollback();
@@ -460,6 +467,7 @@ bool ProjectStore::save(const School &school)
             qe.addBindValue(e.endWeek);
             qe.addBindValue(e.syncCourseId);
             qe.addBindValue(e.progressGroup);
+            qe.addBindValue(e.noLoad ? 1 : 0);
             if (!qe.exec()) {
                 rollback();
                 return fail(qe.lastError().text());
@@ -718,7 +726,7 @@ bool ProjectStore::load(School *school)
         if (!qe.exec(QStringLiteral(
                 "SELECT id,class_id,course_id,weekly_periods,chained_count,chain_length,"
                 "morning_periods,early_periods,is_combined,classroom_id,start_week,end_week,"
-                "sync_course_id,progress_group FROM plan_entries ORDER BY id")))
+                "sync_course_id,progress_group,no_load FROM plan_entries ORDER BY id")))
             return fail(qe.lastError().text());
         while (qe.next()) {
             PlanEntry e;
@@ -736,6 +744,7 @@ bool ProjectStore::load(School *school)
             e.endWeek = qe.value(11).toInt();
             e.syncCourseId = qe.value(12).toLongLong();
             e.progressGroup = qe.value(13).toInt();
+            e.noLoad = qe.value(14).toInt() != 0;
             school->planEntries.append(e);
         }
         QSqlQuery qt(m_db);

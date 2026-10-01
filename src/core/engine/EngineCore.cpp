@@ -97,6 +97,7 @@ Session Problem::makeSession(const PlanEntry &e, int length, bool half) const
     s.length = length;
     s.halfSession = half;
     s.progressGroup = e.progressGroup;
+    s.noLoad = e.noLoad;
     return s;
 }
 
@@ -149,12 +150,15 @@ void Problem::mergeCombined()
             Session m;
             m.entryId = -1;
             m.courseId = cg.entries.first().second;
+            m.noLoad = true; // 所有成员都不计课时，合班后才算「不挂老师」
             bool firstMember = true;
             for (auto &l : memberLists) {
                 const int idx = l.takeFirst();
                 consumed[idx] = true;
                 const Session &s = sessions[idx];
                 m.classIds.append(s.classIds.first());
+                if (!s.noLoad)
+                    m.noLoad = false;
                 for (qint64 t : s.teacherIds) {
                     if (!m.teacherIds.contains(t))
                         m.teacherIds.append(t);
@@ -248,7 +252,7 @@ void Problem::apply(int s, int slot, int half)
                     m_classOcc[m_classIdx[c]][sl][p]++;
             }
             for (qint64 t : ss.teacherIds) {
-                if (m_teacherIdx.contains(t))
+                if (!ss.noLoad && m_teacherIdx.contains(t))
                     m_teacherOcc[m_teacherIdx[t]][sl][p]++;
             }
             if (ss.classroomId >= 0 && m_roomIdx.contains(ss.classroomId))
@@ -277,7 +281,7 @@ void Problem::remove(int s)
                     m_classOcc[m_classIdx[c]][sl][p]--;
             }
             for (qint64 t : ss.teacherIds) {
-                if (m_teacherIdx.contains(t))
+                if (!ss.noLoad && m_teacherIdx.contains(t))
                     m_teacherOcc[m_teacherIdx[t]][sl][p]--;
             }
             if (ss.classroomId >= 0 && m_roomIdx.contains(ss.classroomId))
@@ -407,7 +411,7 @@ int Problem::hardAtNoSync(int s, int slot, int half) const
                     conflicts++;
             }
             for (qint64 t : ss.teacherIds) {
-                if (!m_teacherIdx.contains(t))
+                if (ss.noLoad || !m_teacherIdx.contains(t))
                     continue;
                 const int ti = m_teacherIdx[t];
                 if (m_teacherForbidden[ti].contains(sl))
@@ -484,6 +488,8 @@ int Problem::hardViolations() const
                 && m_courseForbidden[m_courseIdx[ss.courseId]].contains(sl))
                 v++;
             for (qint64 t : ss.teacherIds) {
+                if (ss.noLoad) // 不挂老师：老师禁排、撞课都不算它
+                    continue;
                 if (m_teacherIdx.contains(t) && m_teacherForbidden[m_teacherIdx[t]].contains(sl))
                     v++;
             }

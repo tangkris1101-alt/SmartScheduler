@@ -123,6 +123,16 @@ QVariantList AppController::aiToolSchemasExtra() const
                             {QStringLiteral("description"), tr("组名（可先用 list_time_sync_groups）")}}}},
               {QStringLiteral("name")});
     out << fn(QStringLiteral("list_time_sync_groups"), tr("列出全部同时段组"), {}, {});
+    out << fn(QStringLiteral("set_plan_no_load"),
+              tr("设置「不计课时、不挂老师」：如高中第 9 节体育活动——排课时不占老师、"
+                 "不产生老师撞课，老师个人课表不显示这一格，也不计老师周课时"),
+              {{QStringLiteral("courseName"), courseName},
+               {QStringLiteral("classNames"), classNames},
+               {QStringLiteral("noLoad"),
+                QVariantMap{{QStringLiteral("type"), QStringLiteral("boolean")},
+                            {QStringLiteral("description"),
+                             tr("true 设为不计课时（默认）；false 恢复计课时")}}}},
+              {QStringLiteral("courseName"), QStringLiteral("classNames")});
     out << fn(QStringLiteral("create_combined_group"),
               tr("新建合班组：同一位老师、同一门课的多个班合成一个班一起上课"
                  "（与「同时段组」不同：合班是真合并成一个班，同时段组只是排在同一节）"),
@@ -485,6 +495,54 @@ bool AppController::planAiOperationExtra(const QString &tool, const QVariantMap 
         return *out = p, true;
     }
 
+    if (tool == QLatin1StringView("set_plan_no_load")) {
+        p.title = tr("设置「不计课时、不挂老师」");
+        p.courseId = matchEntity(m_school.courses, args.value(QStringLiteral("courseName")).toString());
+        if (p.courseId < 0) {
+            p.error = tr("找不到课程");
+            return *out = p, true;
+        }
+        QStringList missing;
+        resolveClasses(args.value(QStringLiteral("classNames")).toList(), &p.classIds, &missing);
+        if (p.classIds.isEmpty()) {
+            p.error = tr("班级为空");
+            return *out = p, true;
+        }
+        p.forbidden = args.value(QStringLiteral("noLoad"), true).toBool(); // 复用 forbidden 承载布尔
+        int updated = 0, noPlan = 0;
+        for (const QVariant &cv : p.classIds) {
+            bool found = false;
+            for (const auto &e : m_school.planEntries) {
+                if (e.classId != cv.toLongLong() || e.courseId != p.courseId)
+                    continue;
+                found = true;
+                if (e.noLoad == p.forbidden)
+                    continue;
+                ++updated;
+                if (p.details.size() < 20) {
+                    const sched::ClassInfo *c = m_school.findClass(e.classId);
+                    p.details.append(tr("%1 的「%2」%3")
+                                         .arg(c ? c->name : QString(), courseNameOf(p.courseId),
+                                              p.forbidden ? tr("改为不计课时、不挂老师")
+                                                          : tr("恢复计课时、挂老师")));
+                }
+            }
+            if (!found)
+                ++noPlan;
+        }
+        p.changes = updated;
+        p.summary = tr("%1：%2 个班（%3）")
+                        .arg(p.forbidden ? tr("设为不计课时、不挂老师") : tr("恢复计课时、挂老师"))
+                        .arg(updated)
+                        .arg(courseNameOf(p.courseId));
+        if (noPlan > 0)
+            p.warnings.append(tr("有 %1 个班没排这门课，已跳过").arg(noPlan));
+        if (!missing.isEmpty())
+            p.warnings.append(tr("以下班级未找到：%1").arg(missing.join(QStringLiteral("、"))));
+        p.valid = true;
+        return *out = p, true;
+    }
+
     if (tool == QLatin1StringView("create_combined_group")) {
         p.title = tr("新建合班组");
         p.groupId = -2; // 标记：新建
@@ -675,6 +733,26 @@ bool AppController::applyAiOperationExtra(const QString &tool, const AiOpPlan &p
     } else if (tool == QLatin1StringView("set_teacher_daily_max")) {
         r = batchSetTeacherDailyMaxImpl(p.entityIds, p.dailyMax);
         r.insert(QStringLiteral("changed"), r.value(QStringLiteral("updated")).toInt() > 0);
+    } else if (tool == QLatin1StringView("set_plan_no_load")) {
+        cancelScheduler();
+        makeBatchBackup(tr("设置不计课时"));
+        int updated = 0;
+        for (const QVariant &cv : p.classIds) {
+            for (auto &e : m_school.planEntries) {
+                if (e.classId != cv.toLongLong() || e.courseId != p.courseId)
+                    continue;
+                if (e.noLoad == p.forbidden)
+                    continue;
+                e.noLoad = p.forbidden;
+                ++updated;
+            }
+        }
+        if (updated == 0)
+            discardBatchBackup();
+        else
+            markDirty();
+        r = QVariantMap{{QStringLiteral("updated"), updated},
+                        {QStringLiteral("changed"), updated > 0}};
     } else if (tool == QLatin1StringView("create_combined_group")) {
         const qint64 id = createCombinedGroupByIds(p.groupName, p.syncEntries);
         r = QVariantMap{{QStringLiteral("created"), id >= 0 ? 1 : 0},

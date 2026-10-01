@@ -117,7 +117,10 @@ QualityMetricsResult computeQualityMetrics(const School &school, const QVector<q
 
     // ---- 教学计划：(班级,课程) -> 任课老师；连堂计划 ----
     QHash<QualityPairKey, QVector<qint64>> planTeachers;
+    QSet<QualityPairKey> noLoadPairs; // 不挂老师的格子（如第 9 节体育活动）
     for (const PlanEntry &e : school.planEntries) {
+        if (e.noLoad)
+            noLoadPairs.insert(QualityPairKey{e.classId, e.courseId});
         QVector<qint64> &teachers = planTeachers[QualityPairKey{e.classId, e.courseId}];
         for (qint64 t : e.teacherIds) {
             if (!teachers.contains(t))
@@ -216,16 +219,19 @@ QualityMetricsResult computeQualityMetrics(const School &school, const QVector<q
         const int day = tc.slotDay(a.slotIndex);
         ccDaySlots[ccKey][day].insert(a.slotIndex);
 
-        for (qint64 t : teachers) {
-            QHash<int, double> &all = teacherSlotPeriods[t];
-            all[a.slotIndex] = std::min(1.0, all.value(a.slotIndex) + weight);
-            if (!pe) {
-                QHash<int, double> &acad = teacherAcadPeriods[t];
-                acad[a.slotIndex] = std::min(1.0, acad.value(a.slotIndex) + weight);
+        // 不挂老师的格子：老师课时、撞课、公平性都不计它
+        if (!noLoadPairs.contains(QualityPairKey{a.classId, a.courseId})) {
+            for (qint64 t : teachers) {
+                QHash<int, double> &all = teacherSlotPeriods[t];
+                all[a.slotIndex] = std::min(1.0, all.value(a.slotIndex) + weight);
+                if (!pe) {
+                    QHash<int, double> &acad = teacherAcadPeriods[t];
+                    acad[a.slotIndex] = std::min(1.0, acad.value(a.slotIndex) + weight);
+                }
+                teacherSlotHalves[t][a.slotIndex].append(SlotOccupancy{a.classId, a.courseId, a.half});
+                fairGroups[t][QualityPairKey{a.courseId, a.classId}].append(
+                    Occurrence{t, a.classId, a.courseId, a.slotIndex, day, a.half});
             }
-            teacherSlotHalves[t][a.slotIndex].append(SlotOccupancy{a.classId, a.courseId, a.half});
-            fairGroups[t][QualityPairKey{a.courseId, a.classId}].append(
-                Occurrence{t, a.classId, a.courseId, a.slotIndex, day, a.half});
         }
     }
 

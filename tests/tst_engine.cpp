@@ -23,6 +23,7 @@ private Q_SLOTS:
     void preassignHalfSharesSlot();
     void planTimePreferenceScoring();
     void timeSyncGroupSameSlot();
+    void noLoadNoTeacherClash();
 };
 
 // 测试校例的实体 id 记录
@@ -538,6 +539,64 @@ void TestEngine::timeSyncGroupSameSlot()
 }
 
 // 计划条目的时段要求（软）：morningPeriods 与 earlyPeriods 都应出现在软分项里
+void TestEngine::noLoadNoTeacherClash()
+{
+    // 第 9 节体育活动那种格子：两位老师同时上（同一节），因 noLoad 不算撞课
+    School school;
+    school.timeConfig.daysPerWeek = 2;
+    school.timeConfig.periodsPerDay = 3;
+    school.timeConfig.morningPeriods = 2;
+    ClassInfo c1; c1.name = QStringLiteral("高一1班");
+    ClassInfo c2; c2.name = QStringLiteral("高一2班");
+    const qint64 class1 = school.addClass(c1);
+    const qint64 class2 = school.addClass(c2);
+    Course ty; ty.name = QStringLiteral("体育");
+    const qint64 tiyu = school.addCourse(ty);
+    Teacher t1; t1.name = QStringLiteral("付裕");
+    const qint64 teacher1 = school.addTeacher(t1);
+
+    // 同一个老师、两班各一节体育，且都只有 1 个可用节次 —— 若算撞课，必然排不下
+    PlanEntry e1; e1.classId = class1; e1.courseId = tiyu; e1.weeklyPeriods = 1;
+    e1.teacherIds = {teacher1}; e1.noLoad = true;
+    PlanEntry e2; e2.classId = class2; e2.courseId = tiyu; e2.weeklyPeriods = 1;
+    e2.teacherIds = {teacher1}; e2.noLoad = true;
+    school.addPlanEntry(e1);
+    school.addPlanEntry(e2);
+
+    EngineOptions opt;
+    opt.runs = 1;
+    opt.maxIterationsPerRun = 200;
+    opt.seed = 5;
+    School copy = school;
+    SchedulerEngine engine(copy, opt);
+    QSignalSpy spy(&engine, &SchedulerEngine::finished);
+    engine.start();
+    QVERIFY2(spy.wait(15000), "引擎未完成");
+    const QualityReport report = spy.at(0).at(1).value<QualityReport>();
+    QCOMPARE(report.placedSessions, 2);
+    QCOMPARE(report.hardViolations, 0); // 不挂老师 → 老师撞课不算违例
+
+    // 对照：去掉 noLoad 后同一位老师两班同节就是真撞课（两节课只有 6 个格可用，
+    // 老师撞课使可行解只剩 3 个位置，仍能排下，故这里比的是「老师占用」的语义）
+    School strict = school;
+    strict.findPlanEntry(strict.planEntries[0].id)->noLoad = false;
+    strict.findPlanEntry(strict.planEntries[1].id)->noLoad = false;
+    SchedulerEngine engine2(strict, opt);
+    QSignalSpy spy2(&engine2, &SchedulerEngine::finished);
+    engine2.start();
+    QVERIFY2(spy2.wait(15000), "引擎未完成");
+    const Schedule sch2 = spy2.at(0).at(0).value<Schedule>();
+    int s1 = -1, s2 = -1;
+    for (const auto &a : sch2.assignments) {
+        if (a.classId == class1)
+            s1 = a.slotIndex;
+        if (a.classId == class2)
+            s2 = a.slotIndex;
+    }
+    QVERIFY(s1 >= 0 && s2 >= 0);
+    QVERIFY(s1 != s2); // 计课时的体育：同一老师必须错开
+}
+
 void TestEngine::planTimePreferenceScoring()
 {
     School school;

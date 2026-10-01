@@ -47,6 +47,7 @@ private Q_SLOTS:
     void aiToolsExtended();
     void aiTimeSyncTools();
     void aiCombinedGroupTools();
+    void aiNoLoadTool();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -892,6 +893,23 @@ void TestApp::aiToolLayer()
     QVERIFY(names.contains(QStringLiteral("batch_preassign")));
     QVERIFY(names.contains(QStringLiteral("query_schedule")));
     QVERIFY(names.contains(QStringLiteral("quality_report")));
+    // 全部扩展工具都必须暴露给模型，少一个模型就会说「没这个功能」
+    for (const char *t : {"set_plan_chained", "set_plan_early_periods", "set_plan_teachers",
+                          "set_teacher_daily_max", "batch_no_schedule_by_group",
+                          "query_teacher_schedule", "create_time_sync_group",
+                          "remove_time_sync_group", "list_time_sync_groups",
+                          "set_plan_no_load", "create_combined_group",
+                          "remove_combined_group", "list_combined_groups"}) {
+        QVERIFY2(names.contains(QString::fromLatin1(t)), t);
+    }
+    // 每个工具都要有合法的 JSON schema 形态，否则上游会 400
+    for (const auto &v : tools) {
+        const QVariantMap m = v.toMap();
+        QVERIFY(m.contains(QStringLiteral("name")));
+        QVERIFY(m.contains(QStringLiteral("description")));
+        QCOMPARE(m.value(QStringLiteral("parameters")).toMap().value(QStringLiteral("type")).toString(),
+                 QStringLiteral("object"));
+    }
 
     // 只读工具：列班级
     const QVariantMap classes = app.aiRunReadTool(QStringLiteral("list_classes"), {});
@@ -1201,6 +1219,67 @@ void TestApp::aiCombinedGroupTools()
                      {QStringLiteral("args"), QVariantMap{{QStringLiteral("name"), QStringLiteral("合班")}}}}});
     QCOMPARE(removed.value(QStringLiteral("changed")).toBool(), true);
     QCOMPARE(app.school()->combinedGroups.size(), 0);
+}
+
+void TestApp::aiNoLoadTool()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    sched::PlanEntry e;
+    e.classId = ids.class1;
+    e.courseId = ids.yuwen;
+    e.weeklyPeriods = 1;
+    e.teacherIds = {ids.tZhang};
+    app.school()->addPlanEntry(e);
+    sched::PlanEntry e2 = e;
+    e2.classId = ids.class2;
+    app.school()->addPlanEntry(e2);
+
+    // 干跑：两个班都改成「不计课时、不挂老师」
+    const QVariantMap dry = app.aiDescribe(
+        QStringLiteral("set_plan_no_load"),
+        {{QStringLiteral("courseName"), QStringLiteral("语文")},
+         {QStringLiteral("classNames"), QVariantList{QStringLiteral("1班"), QStringLiteral("2班")}}});
+    QCOMPARE(dry.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(dry.value(QStringLiteral("changes")).toInt(), 2);
+
+    const QVariantMap applied = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("set_plan_no_load")},
+                     {QStringLiteral("args"),
+                      QVariantMap{{QStringLiteral("courseName"), QStringLiteral("语文")},
+                                  {QStringLiteral("classNames"),
+                                   QVariantList{QStringLiteral("1班"), QStringLiteral("2班")}}}}}});
+    QCOMPARE(applied.value(QStringLiteral("changed")).toBool(), true);
+    for (const auto &pe : app.school()->planEntries)
+        QCOMPARE(pe.noLoad, true);
+    // list_teachers 的周节数不再计它
+    const QVariantList teachers = app.aiRunReadTool(QStringLiteral("list_teachers"), {})
+                                      .value(QStringLiteral("data"))
+                                      .toList();
+    for (const QVariant &tv : teachers) {
+        if (tv.toMap().value(QStringLiteral("name")).toString() == QStringLiteral("张"))
+            QCOMPARE(tv.toMap().value(QStringLiteral("周节数")).toInt(), 0);
+    }
+
+    // 老师个人课表不显示这一格（发布给老师之前要摘掉）
+    sched::ScheduleAssignment a;
+    a.classId = ids.class1;
+    a.courseId = ids.yuwen;
+    a.slotIndex = 0;
+    a.half = 0;
+    app.school()->schedule.assignments.append(a);
+    QVERIFY(app.teacherRow(ids.tZhang).at(0).toList().isEmpty());
+
+    // 恢复
+    const QVariantMap back = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("set_plan_no_load")},
+                     {QStringLiteral("args"),
+                      QVariantMap{{QStringLiteral("courseName"), QStringLiteral("语文")},
+                                  {QStringLiteral("classNames"), QVariantList{QStringLiteral("1班")}},
+                                  {QStringLiteral("noLoad"), false}}}}});
+    QCOMPARE(back.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->planEntries[0].noLoad, false);
+    QCOMPARE(app.school()->planEntries[1].noLoad, true);
 }
 
 void TestApp::schedulerBridge()

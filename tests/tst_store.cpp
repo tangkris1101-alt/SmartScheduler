@@ -107,6 +107,15 @@ static School makeSampleSchool()
     e1.progressGroup = 1; // 进度一致组（M3b 新增字段，验证存取）
     school.addPlanEntry(e1);
 
+    // 1班体育（第 9 节那种「不计课时、不挂老师」的格子，schema v5 新增字段）
+    PlanEntry e1b;
+    e1b.classId = class1;
+    e1b.courseId = courseTiyu;
+    e1b.teacherIds = {teacher1};
+    e1b.weeklyPeriods = 1;
+    e1b.noLoad = true;
+    school.addPlanEntry(e1b);
+
     // 2班数学（双师），周4.5节（单双周）
     PlanEntry e2;
     e2.classId = class2;
@@ -277,6 +286,7 @@ void TestStore::migrateFromV1()
         QVERIFY(q.exec(QStringLiteral("DROP TABLE IF EXISTS time_sync_group_members")));
         QVERIFY(q.exec(QStringLiteral("DROP TABLE IF EXISTS time_sync_groups")));
         QVERIFY(q.exec(QStringLiteral("ALTER TABLE plan_entries DROP COLUMN early_periods")));
+        QVERIFY(q.exec(QStringLiteral("ALTER TABLE plan_entries DROP COLUMN no_load"))); // v4→v5
         QVERIFY(q.exec(QStringLiteral("UPDATE meta SET value='1' WHERE key='schema_version'")));
         db.close();
     }
@@ -295,8 +305,10 @@ void TestStore::migrateFromV1()
     for (const auto &p : loaded.preAssignments)
         QCOMPARE(p.half, 0);
     QVERIFY(!loaded.planEntries.isEmpty());
-    for (const auto &e : loaded.planEntries)
+    for (const auto &e : loaded.planEntries) {
         QCOMPARE(e.earlyPeriods, -1);
+        QCOMPARE(e.noLoad, false); // v5 新增列按默认值补齐
+    }
 }
 
 void TestStore::overwriteSave()

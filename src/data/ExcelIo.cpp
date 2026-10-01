@@ -154,7 +154,8 @@ bool ExcelImporter::writeImportTemplate(const QString &path, QString *error)
     writeHeader({QStringLiteral("班级*"), QStringLiteral("课程*"), QStringLiteral("任课老师(顿号分隔)"),
                  QStringLiteral("周节数*"), QStringLiteral("连课次数"), QStringLiteral("连课节数"),
                  QStringLiteral("上午节数(空=自动)"), QStringLiteral("合班(是/否)"), QStringLiteral("教室"),
-                 QStringLiteral("开课周"), QStringLiteral("结束周(空=学期末)"), QStringLiteral("进度组")});
+                 QStringLiteral("开课周"), QStringLiteral("结束周(空=学期末)"), QStringLiteral("进度组"),
+                 QStringLiteral("不计课时(是/否)")});
     doc.write(2, 1, QStringLiteral("高一1班"));
     doc.write(2, 2, QStringLiteral("语文"));
     doc.write(2, 3, QStringLiteral("张明"));
@@ -440,6 +441,7 @@ ImportReport ExcelImporter::importFile(const QString &path, School *school, bool
                 entry->startWeek = std::max(1, int(cellNumber(doc, row, 10, 1)));
             entry->endWeek = cellText(doc, row, 11).isEmpty() ? 0 : int(cellNumber(doc, row, 11, 0));
             entry->progressGroup = cellText(doc, row, 12).isEmpty() ? -1 : int(cellNumber(doc, row, 12, -1));
+            entry->noLoad = yesNo(cellText(doc, row, 13)); // 不计课时、不挂老师（如第 9 节体育活动）
         }
     }
 

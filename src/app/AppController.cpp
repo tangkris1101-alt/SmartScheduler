@@ -155,7 +155,7 @@ QVariantMap AppController::aiRunReadTool(const QString &tool, const QVariantMap 
         for (const auto &t : m_school.teachers) {
             int load = 0;
             for (const auto &e : m_school.planEntries) {
-                if (e.teacherIds.contains(t.id))
+                if (e.teacherIds.contains(t.id) && !e.noLoad) // 不挂老师的格子不计课时
                     load += int(e.weeklyPeriods);
             }
             out.append(QVariantMap{{QStringLiteral("name"), t.name},
@@ -2106,6 +2106,8 @@ QVariantList AppController::teacherRow(qint64 teacherId) const
                 if (e.classId != a.classId || e.courseId != a.courseId
                     || !e.teacherIds.contains(teacherId))
                     continue;
+                if (e.noLoad)
+                    break; // 不挂老师：老师个人课表上不显示这一格（发布前要摘掉）
                 const sched::ClassInfo *c = m_school.findClass(a.classId);
                 const sched::Course *co = m_school.findCourse(a.courseId);
                 items.append(QVariantMap{

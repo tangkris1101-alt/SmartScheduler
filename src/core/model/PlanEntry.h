@@ -22,6 +22,9 @@ struct PlanEntry {
     int endWeek = 0;                   // 结束周，0 表示到学期末
     qint64 syncCourseId = -1;          // 同步课程（与该课程同时同节排课），-1 无
     int progressGroup = -1;            // 进度一致组号（同老师同课同组要求连排），-1 未分组
+    // 不计课时、不挂老师（如高中第 9 节的体育活动）：排课时它不占老师、不产生老师撞课，
+    // 发布给老师看的个人课表不显示这一格，也不计入老师的周课时
+    bool noLoad = false;
 
     bool operator==(const PlanEntry &) const = default;
 };
