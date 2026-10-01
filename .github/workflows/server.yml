@@ -50,10 +50,10 @@ jobs:
           ssh-keyscan -p "${{ secrets.SERVER_PORT }}" "${{ secrets.SERVER_HOST }}" \
             >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: 同步代码（保留服务端 .env 与日志）
+      - name: 同步代码（保留服务端 .env、日志与已登记设备）
         run: |
           rsync -az --delete \
-            --exclude node_modules --exclude .env --exclude logs \
+            --exclude node_modules --exclude .env --exclude logs --exclude data \
             -e "ssh -p ${{ secrets.SERVER_PORT }} -i ~/.ssh/deploy_key" \
             server/ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/www/wwwroot/api.class.feimsg.cn/app/"
 

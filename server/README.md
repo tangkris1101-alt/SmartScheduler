@@ -25,16 +25,30 @@ server/
 |---|---|---|
 | GET | `/v1/health` | 健康检查 + 当日用量 |
 | GET | `/v1/version` | 版本检查通道：直连 GitHub API 取公开仓最新 release（`?fresh=1` 强制回源，60s 缓存，无缓存且上游不可用时返回 503 让客户端回退） |
+| GET | `/v1/invite/status?device=<id>` | 内测门禁：该设备是否已通过（`gate:false` 表示服务端未配置邀请码） |
+| POST | `/v1/invite/verify` | 校验邀请码 `{code, device, app}`，通过则登记设备（只存 hash，明文不落盘） |
+| POST | `/v1/feedback` | 错误日志反馈 `{device, app, os, description, log}`，落 `logs/feedback/`，返回编号 |
 | POST | `/v1/ai/orchestrate` | 编排主入口；`stream:false` 返回 JSON，默认 SSE 流式 |
 | POST | `/v1/ai/feedback` | 采纳率埋点（只记条数，不记内容） |
 
 鉴权：请求头 `X-App-Token: <应用令牌>`；`X-Client-Version` 可选（用于审计）。
-`/v1/health` 与 `/v1/version` 匿名可用（客户端检查更新时尚无令牌上下文）。
+`/v1/health`、`/v1/version`、`/v1/invite/*` 匿名可用（客户端检查更新/输邀请码时尚无令牌上下文）；
+`/v1/feedback` 与 AI 接口需要应用令牌。
 
 限额（均可用环境变量覆盖）：单 IP 5 分钟 400 次、并发 ≤ 4、当日 token 预算 200 万。
 **工具数量与 max_tokens 不封顶**：客户端一次复杂提问（如逐班查询）可能连发几十个请求，
 `max_tokens` 原样透传给上游（客户端不给就不传，由模型自己定）；需要收紧时用
 `MAX_TOOLS` / `MAX_TOKENS_CAP` / `DEFAULT_MAX_TOKENS` / `IP_MAX_REQUESTS` 给具体数值。
+
+内测门禁与反馈相关环境变量：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `INVITE_CODE_HASH` | 空 | 邀请码的 sha256（规范化：去空格/连字符 + 转大写）。**留空 = 不启用门禁** |
+| `DATA_DIR` | `app/data` | 已登记设备存放目录（`invite-devices.jsonl`，rsync 时排除） |
+| `INVITE_IP_MAX` / `INVITE_IP_WINDOW_MS` | 20 / 10 分钟 | 单 IP 试码次数上限 |
+| `FEEDBACK_MAX_BYTES` | 524288 | 单次反馈允许的日志正文上限 |
+| `FEEDBACK_IP_MAX` / `FEEDBACK_IP_WINDOW_MS` | 10 / 10 分钟 | 单 IP 反馈频率上限 |
 
 ## 部署（CI/CD 自动）
 

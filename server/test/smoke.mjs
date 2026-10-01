@@ -1,6 +1,8 @@
 // 中继服务离线自测：内置假上游，验证鉴权 / 参数校验 / 流式透传 / 限额 / 埋点。
 // 用法：node test/smoke.mjs   （不需要真实上游密钥，可在 CI 里跑）
 import { createServer } from 'node:http';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -98,6 +100,8 @@ async function main() {
             UPSTREAM_KEY: 'smoke-key',
             IP_MAX_REQUESTS: String(IP_MAX_REQUESTS),
             VERSION_API: `http://127.0.0.1:${UPSTREAM_PORT}/releases/latest`,
+            INVITE_CODE_HASH: createHash('sha256').update('SMOKETEST').digest('hex'),
+            DATA_DIR: join(APP_DIR, 'logs', 'smoke-data'),
             VERSION_TTL_MS: '3000',
             VERSION_FORCE_MIN_MS: '2000',
             LOG_DIR: join(APP_DIR, 'logs'),
@@ -214,7 +218,51 @@ async function main() {
     }).then((r) => r.json());
     check('feedback.ok', fb.ok === true);
 
-    console.log('限额（IP 窗口）');
+    console.log('内测邀请码门禁');
+    const dev = 'smoke-device-0001';
+    const st0 = await (await fetch(`${base}/v1/invite/status?device=${dev}`)).json();
+    check('未登记设备 → 未通过', st0.gate === true && st0.approved === false, JSON.stringify(st0));
+    const badCode = await fetch(`${base}/v1/invite/verify`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: 'NOPE-0000', device: dev, app: '1.0.44' }),
+    });
+    check('错误邀请码 → 401', badCode.status === 401, `status=${badCode.status}`);
+    const okCode = await fetch(`${base}/v1/invite/verify`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        // 故意带小写与空格/连字符：服务端会规范化（去空格连字符 + 转大写）
+        body: JSON.stringify({ code: ' smoke test ', device: dev, app: '1.0.44' }),
+    }).then((r) => r.json());
+    check('正确邀请码（含空格）→ 通过', okCode.ok === true && okCode.approved === true,
+          JSON.stringify(okCode));
+    const st1 = await (await fetch(`${base}/v1/invite/status?device=${dev}`)).json();
+    check('登记后 → 已通过', st1.approved === true, JSON.stringify(st1));
+    const stOther = await (await fetch(`${base}/v1/invite/status?device=other-device`)).json();
+    check('其它设备仍拦截', stOther.approved === false, JSON.stringify(stOther));
+
+    console.log('错误日志反馈');
+    const noTokenFb = await fetch(`${base}/v1/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: 'x' }),
+    });
+    check('无令牌 → 401', noTokenFb.status === 401);
+    const emptyFb = await fetch(`${base}/v1/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
+        body: JSON.stringify({ description: '   ', log: '' }),
+    });
+    check('描述与日志都空 → 400', emptyFb.status === 400, `status=${emptyFb.status}`);
+    const report = await fetch(`${base}/v1/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
+        body: JSON.stringify({ device: dev, app: '1.0.44', os: 'Windows 10',
+                               description: '排课按钮点了没反应', log: 'ERROR 假日志正文' }),
+    }).then((r) => r.json());
+    check('反馈提交成功并返回编号',
+          report.ok === true && /^\d{8}-[0-9a-f]{8}$/.test(report.id || ''),
+          JSON.stringify(report));
+    const fbLog = join(APP_DIR, 'logs', 'feedback', `${report.id}.log`);
+    check('日志正文已落盘', existsSync(fbLog) && readFileSync(fbLog, 'utf8').includes('假日志正文'));
+
     let limited = false;
     for (let i = 0; i < IP_MAX_REQUESTS + 2; ++i) {
         const r = await fetch(`${base}/v1/ai/orchestrate`, {
@@ -248,8 +296,7 @@ async function main() {
             LOG_DIR: join(APP_DIR, 'logs'),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    relay2.stderr.on('data', (d) => process.stderr.write(`[relay2] ${d}`));
+    });    relay2.stderr.on('data', (d) => process.stderr.write(`[relay2] ${d}`));
     let up2 = false;
     for (let i = 0; i < 40; ++i) {
         try {

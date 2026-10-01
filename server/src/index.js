@@ -5,11 +5,13 @@
 //  - 鉴权：X-App-Token（应用令牌），常量时间比较；
 //  - 限额：按 IP 的请求窗口、按令牌的每日 token 预算、并发上限；工具数量与 max_tokens 不封顶
 //    （客户端一次复杂提问可能连发几十个请求，靠 IP 窗口与每日预算兜底）；
+//  - 内测门禁：/v1/invite/status 查设备是否已通过，/v1/invite/verify 输码登记设备（只存 hash）；
+//  - 错误日志反馈：/v1/feedback 收「用户描述 + 客户端日志正文」，落 logs/feedback/；
 //  - 审计：每次请求落一行 JSONL（不含对话内容，只记用量与耗时）；
 //  - 流式：默认 SSE 透传；客户端请求 stream=false 时返回普通 JSON（便于早期联调与测试）。
 import express from 'express';
-import { createHash, timingSafeEqual } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -169,6 +171,79 @@ async function versionPayload(force) {
     }
 }
 
+// ---------------------------------------------------------------- 内测邀请码 / 设备登记
+// 门禁：应用首次启动要求输入邀请码，服务端只存 sha256（不存明文）；校验通过后把设备号
+// 记进 data/invite-devices.jsonl，之后每次启动查 /v1/invite/status 即可跳过输入。
+const cfgInvite = {
+    // 规范化规则：去掉空格与连字符、转大写。留空 = 不启用门禁（返回 approved:true，避免把人锁在外面）
+    codeHash: (process.env.INVITE_CODE_HASH || '').trim().toLowerCase(),
+    dataDir: process.env.DATA_DIR || join(APP_DIR, 'data'),
+    ipWindowMs: Number(process.env.INVITE_IP_WINDOW_MS || 600000), // 10 分钟
+    ipMaxAttempts: Number(process.env.INVITE_IP_MAX || 20),        // 单 IP 最多试几次
+};
+const approvedDevices = new Set();
+const inviteAttempts = new Map();
+
+function normalizeCode(s) {
+    return String(s || '').replace(/[\s-]/g, '').toUpperCase();
+}
+function sha256(s) {
+    return createHash('sha256').update(String(s)).digest('hex');
+}
+function deviceFile() {
+    return join(cfgInvite.dataDir, 'invite-devices.jsonl');
+}
+function loadApprovedDevices() {
+    let n = 0;
+    try {
+        for (const line of readFileSync(deviceFile(), 'utf8').split('\n')) {
+            if (!line.trim())
+                continue;
+            try {
+                const r = JSON.parse(line);
+                if (r && r.device) {
+                    approvedDevices.add(r.device);
+                    n++;
+                }
+            } catch { /* 单行坏了不影响其它行 */ }
+        }
+    } catch { /* 首次运行还没有文件 */ }
+    return n;
+}
+function rememberDevice(device, app, ip) {
+    approvedDevices.add(device);
+    mkdirSync(cfgInvite.dataDir, { recursive: true });
+    appendFileSync(deviceFile(),
+                   JSON.stringify({ device, app, ip, at: new Date().toISOString() }) + '\n');
+}
+function countInviteAttempt(ip) {
+    const now = Date.now();
+    const hits = (inviteAttempts.get(ip) || []).filter((t) => now - t < cfgInvite.ipWindowMs);
+    hits.push(now);
+    inviteAttempts.set(ip, hits);
+    return hits.length;
+}
+function clientIp(req) {
+    return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?')
+        .toString().split(',')[0].trim();
+}
+
+// ---------------------------------------------------------------- 错误日志反馈
+const cfgFeedback = {
+    maxLogBytes: Number(process.env.FEEDBACK_MAX_BYTES || 512 * 1024),
+    ipWindowMs: Number(process.env.FEEDBACK_IP_WINDOW_MS || 600000), // 10 分钟
+    ipMaxReports: Number(process.env.FEEDBACK_IP_MAX || 10),
+};
+const feedbackHits = new Map();
+
+function countFeedback(ip) {
+    const now = Date.now();
+    const hits = (feedbackHits.get(ip) || []).filter((t) => now - t < cfgFeedback.ipWindowMs);
+    hits.push(now);
+    feedbackHits.set(ip, hits);
+    return hits.length;
+}
+
 // ---------------------------------------------------------------- 入参校验
 function validate(body) {
     if (!body || typeof body !== 'object')
@@ -199,7 +274,8 @@ function validate(body) {
 // ---------------------------------------------------------------- 应用
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '256kb' }));
+// 反馈接口要带日志正文（客户端截到 ~400KB），所以整体放宽到 640KB
+app.use(express.json({ limit: '640kb' }));
 
 app.get('/v1/health', (req, res) => {
     res.json({
@@ -211,6 +287,85 @@ app.get('/v1/health', (req, res) => {
         dailyTokens: daily.tokens,
         dailyBudget: cfg.dailyTokenBudget,
     });
+});
+
+// ---------------------------------------------------------------- 内测门禁 + 反馈
+// 设备是否已通过邀请码：应用每次启动查一次，approved=true 就跳过输入邀请码
+app.get('/v1/invite/status', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const device = String(req.query.device || '').slice(0, 64);
+    if (!device)
+        return res.status(400).json({ ok: false, error: '缺少设备标识' });
+    const gate = cfgInvite.codeHash.length > 0; // 没配邀请码 = 不启用门禁
+    res.json({ ok: true, gate, approved: !gate || approvedDevices.has(device) });
+});
+
+// 校验邀请码：通过则登记设备（之后该设备免输）
+app.post('/v1/invite/verify', (req, res) => {
+    const ip = clientIp(req);
+    const attempts = countInviteAttempt(ip);
+    if (attempts > cfgInvite.ipMaxAttempts) {
+        audit({ ip, path: 'invite/verify', status: 429, reason: 'ip' });
+        return res.status(429).json({ ok: false, error: '尝试次数过多，请稍后再试' });
+    }
+    if (!cfgInvite.codeHash)
+        return res.json({ ok: true, gate: false, approved: true });
+
+    const body = req.body || {};
+    const device = String(body.device || '').slice(0, 64);
+    const appVer = String(body.app || '').slice(0, 24);
+    if (!device)
+        return res.status(400).json({ ok: false, error: '缺少设备标识' });
+
+    const ok = tokenEqual(sha256(normalizeCode(body.code)), cfgInvite.codeHash);
+    if (!ok) {
+        audit({ ip, path: 'invite/verify', status: 401, reason: 'bad_code', client: appVer });
+        return res.status(401).json({ ok: false, error: '邀请码不正确' });
+    }
+    rememberDevice(device, appVer, ip);
+    audit({ ip, path: 'invite/verify', status: 200, device, client: appVer });
+    console.log(`[relay] 邀请码通过：device=${device} app=${appVer} ip=${ip}`);
+    res.json({ ok: true, approved: true });
+});
+
+// 错误日志反馈：描述 + 客户端日志正文（客户端已截断），落盘便于人工看
+app.post('/v1/feedback', (req, res) => {
+    const ip = clientIp(req);
+    const token = String(req.headers['x-app-token'] || '');
+    if (!cfg.appToken || !tokenEqual(token, cfg.appToken)) {
+        audit({ ip, path: 'feedback', status: 401 });
+        return res.status(401).json({ ok: false, error: '应用令牌无效' });
+    }
+    if (countFeedback(ip) > cfgFeedback.ipMaxReports) {
+        audit({ ip, path: 'feedback', status: 429, reason: 'ip' });
+        return res.status(429).json({ ok: false, error: '反馈提交过于频繁，请稍后再试' });
+    }
+    const body = req.body || {};
+    const description = String(body.description || '').slice(0, 4000);
+    const log = typeof body.log === 'string' ? body.log.slice(-cfgFeedback.maxLogBytes) : '';
+    if (!description.trim() && !log) {
+        audit({ ip, path: 'feedback', status: 400, reason: 'empty' });
+        return res.status(400).json({ ok: false, error: '请写点描述，或勾选附带日志' });
+    }
+    const device = String(body.device || '').slice(0, 64);
+    const appVer = String(body.app || '').slice(0, 24);
+    const os = String(body.os || '').slice(0, 80);
+    const id = `${dayKey().replace(/-/g, '')}-${randomBytes(4).toString('hex')}`;
+    try {
+        const dir = join(cfg.logDir, 'feedback');
+        mkdirSync(dir, { recursive: true });
+        if (log)
+            writeFileSync(join(dir, `${id}.log`), log, 'utf8');
+        appendFileSync(join(cfg.logDir, `feedback-${dayKey()}.jsonl`),
+                       JSON.stringify({ id, at: new Date().toISOString(), device, app: appVer,
+                                        os, ip, description, logBytes: log.length }) + '\n');
+    } catch (err) {
+        console.error('[relay] 反馈落盘失败', err.message);
+        return res.status(500).json({ ok: false, error: '服务端写入失败' });
+    }
+    audit({ ip, path: 'feedback', status: 200, device, client: appVer, bytes: log.length });
+    console.log(`[relay] 收到反馈 ${id}（device=${device} 日志=${log.length} 字节）`);
+    res.json({ ok: true, id });
 });
 
 // 桌面端「检查更新」的首选通道：数据直接来自 GitHub API（详见文件上方 cfgVersion 注释）
@@ -381,8 +536,11 @@ app.post('/v1/ai/feedback', (req, res) => {
 });
 
 const server = app.listen(cfg.port, cfg.host, () => {
+    const devices = loadApprovedDevices();
     console.log(`[relay] listening on http://${cfg.host}:${cfg.port}  model=${cfg.defaultModel}`
                 + `  upstream=${cfg.upstreamBase}`);
+    console.log(`[relay] 内测门禁 ${cfgInvite.codeHash ? '已启用' : '未启用（未配置 INVITE_CODE_HASH）'}`
+                + `  已登记设备 ${devices} 台`);
 });
 
 function shutdown(sig) {
