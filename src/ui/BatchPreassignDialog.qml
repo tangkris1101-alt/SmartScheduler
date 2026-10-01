@@ -86,7 +86,10 @@ Popup {
 
     modal: true
     anchors.centerIn: parent
-    width: 620
+    // 宽度按内容自适应：里面几行是固定宽度控件（时段选择、半周/冲突策略），
+    // 写死 620 会让它们冲出卡片；上限留出窗口边距，窄窗口下不超出屏幕
+    width: Math.min(Math.max(620, implicitWidth),
+                    parent && parent.width > 0 ? parent.width - 48 : 900)
     padding: 0
     background: Rectangle {
         radius: Theme.radiusL
@@ -113,6 +116,7 @@ Popup {
             Layout.leftMargin: Theme.spacingL
             Layout.rightMargin: Theme.spacingL
             Layout.fillWidth: true
+            Layout.preferredWidth: 0 // 不参与对话框隐式宽度，否则整段未换行宽度会把卡片顶宽
             text: qsTr("预排是硬规定：所选班级的这些格子必须排这门课。适合「全年级每天第 8 节自习」「各班班会固定在周一第 8 节」这类需求；两门课共用一格时，分别用「单周」「双周」各设一次即可。")
             font.pixelSize: Theme.fontCaption
             color: Theme.textSecondary
@@ -231,7 +235,7 @@ Popup {
                 currentIndex: root.half
                 onTabClicked: function (index) { root.half = index }
             }
-            Text { text: qsTr("该格已有其他预排时"); color: Theme.text; font.pixelSize: Theme.fontBody }
+            Text { text: qsTr("已有预排"); color: Theme.text; font.pixelSize: Theme.fontBody }
             AppTabs {
                 model: [qsTr("跳过"), qsTr("覆盖")]
                 currentIndex: root.conflictMode
@@ -240,15 +244,18 @@ Popup {
             Item { Layout.fillWidth: true }
             Text {
                 text: root.mode === 0
-                      ? qsTr("将生成 %1 条（%2 个班 × %3 格）")
+                      ? qsTr("将生成 %1 条（%2 班 × %3 格）")
                             .arg(root.targetClassIds().length * slotPicker.slots().length)
                             .arg(root.targetClassIds().length)
                             .arg(slotPicker.slots().length)
-                      : qsTr("将清除匹配的预排（%1 个班 × %2 格）")
+                      : qsTr("将清除匹配的预排（%1 班 × %2 格）")
                             .arg(root.targetClassIds().length)
                             .arg(slotPicker.slots().length)
                 color: Theme.textSecondary
                 font.pixelSize: Theme.fontCaption
+                elide: Text.ElideRight
+                // 窄窗口时先压缩这句统计，别把这一行顶出卡片
+                Layout.maximumWidth: Math.max(120, root.width * 0.34)
             }
         }
 

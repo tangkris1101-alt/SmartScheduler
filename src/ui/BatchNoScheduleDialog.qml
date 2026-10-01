@@ -84,7 +84,9 @@ Popup {
 
     modal: true
     anchors.centerIn: parent
-    width: 660
+    // 与批量预排同一处理：内容里有固定宽度的行，写死宽度会让它们冲出卡片
+    width: Math.min(Math.max(660, implicitWidth),
+                    parent && parent.width > 0 ? parent.width - 48 : 900)
     padding: 0
     background: Rectangle {
         radius: Theme.radiusL
@@ -111,6 +113,7 @@ Popup {
             Layout.leftMargin: Theme.spacingL
             Layout.rightMargin: Theme.spacingL
             Layout.fillWidth: true
+            Layout.preferredWidth: 0 // 不参与对话框隐式宽度，否则整段未换行宽度会把卡片顶宽
             text: qsTr("「不排」也是硬规定：这些对象在这些时段不上课。老师可先按教研组一键勾选（如「周一第 1 节开班主任会」）。")
             font.pixelSize: Theme.fontCaption
             color: Theme.textSecondary
