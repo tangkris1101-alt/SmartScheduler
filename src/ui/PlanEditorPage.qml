@@ -274,14 +274,15 @@ Item {
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
 
-                            readonly property var colWidths: [170, 160, 104, 86, 86, 96, 96, 52, 130, 84, 96, 120, 48]
+                            readonly property var colWidths: [170, 160, 104, 86, 86, 96, 96, 52, 130, 84, 96, 120, 84, 48]
                             readonly property var colLabels: [qsTr("课程"), qsTr("任课老师"), qsTr("周节数"),
                                 qsTr("连课次数"), qsTr("连课节数"), qsTr("上午节数"), qsTr("前 N 节"), qsTr("合班"),
-                                qsTr("教室"), qsTr("开课周"), qsTr("结束周"), qsTr("同步课"), ""]
+                                qsTr("教室"), qsTr("开课周"), qsTr("结束周"), qsTr("同步课"),
+                                qsTr("不计课时"), ""]
 
                             Column {
                                 id: planColumn
-                                width: 1350
+                                width: 1434
 
                                 // 表头
                                 Row {
@@ -575,9 +576,18 @@ Item {
                                                                                index === 0 ? -1 : root.courseIds[index])
                                                 }
                                             }
-                                            // 删除
+                                            // 不计课时、不挂老师（如第 9 节体育活动）
                                             Item {
                                                 width: tableFlick.colWidths[12]; height: 50
+                                                AppSwitch {
+                                                    anchors.centerIn: parent
+                                                    checked: { root.rev; return planModel.get(planRow.index, "noLoad") }
+                                                    onToggled: planModel.set(planRow.index, "noLoad", checked)
+                                                }
+                                            }
+                                            // 删除
+                                            Item {
+                                                width: tableFlick.colWidths[13]; height: 50
                                                 Text {
                                                     anchors.centerIn: parent
                                                     text: "✕"

@@ -36,6 +36,7 @@ public:
         SyncCourseIdRole,
         SyncCourseNameRole,
         ProgressGroupRole,
+        NoLoadRole,      // 不计课时、不挂老师（如第 9 节体育活动）
         DuplicateRole,   // 同班同课重复（红色警告）
         TeacherWarnRole  // 老师不在课程教研组（黄色提示，不强制）
     };

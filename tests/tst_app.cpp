@@ -315,6 +315,11 @@ void TestApp::planListModelOps()
     QVERIFY(model.set(0, QStringLiteral("chainedCount"), 1));
     QVERIFY(model.set(0, QStringLiteral("chainLength"), 2));
     QVERIFY(model.set(0, QStringLiteral("progressGroup"), 2));
+    // 「不计课时、不挂老师」列：界面开关写的就是这一对角色
+    QCOMPARE(model.get(0, QStringLiteral("noLoad")).toBool(), false);
+    QVERIFY(model.set(0, QStringLiteral("noLoad"), true));
+    QCOMPARE(model.get(0, QStringLiteral("noLoad")).toBool(), true);
+    QVERIFY(model.set(0, QStringLiteral("noLoad"), false));
     model.toggleTeacher(0, ids.tZhang);
     QCOMPARE(model.get(0, QStringLiteral("teacherNames")).toString(), QStringLiteral("张"));
     QCOMPARE(model.get(0, QStringLiteral("progressGroup")).toInt(), 2);

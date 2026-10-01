@@ -85,6 +85,7 @@ QVariant PlanListModel::data(const QModelIndex &index, int role) const
     case MorningPeriodsRole: return e->morningPeriods;
     case EarlyPeriodsRole: return e->earlyPeriods;
     case IsCombinedRole: return e->isCombined;
+    case NoLoadRole: return e->noLoad;
     case ClassroomIdRole: return e->classroomId;
     case ClassroomNameRole: {
         const sched::Classroom *r = s->findClassroom(e->classroomId);
@@ -139,6 +140,7 @@ QHash<int, QByteArray> PlanListModel::roleNames() const
             {MorningPeriodsRole, "morningPeriods"},
             {EarlyPeriodsRole, "earlyPeriods"},
             {IsCombinedRole, "isCombined"},
+            {NoLoadRole, "noLoad"},
             {ClassroomIdRole, "classroomId"},
             {ClassroomNameRole, "classroomName"},
             {StartWeekRole, "startWeek"},
@@ -180,6 +182,7 @@ bool PlanListModel::set(int row, const QString &roleName, const QVariant &value)
     case MorningPeriodsRole: e->morningPeriods = value.toInt(); break;
     case EarlyPeriodsRole: e->earlyPeriods = value.toInt(); break;
     case IsCombinedRole: e->isCombined = value.toBool(); break;
+    case NoLoadRole: e->noLoad = value.toBool(); break;
     case ClassroomIdRole: e->classroomId = value.toLongLong(); break;
     case StartWeekRole: e->startWeek = value.toInt(); break;
     case EndWeekRole: e->endWeek = value.toInt(); break;
