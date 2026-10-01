@@ -156,6 +156,14 @@ void TestModel::teacherOccupancy()
     act.activityCourseId = course2;
     school.addTeacherActivity(act);
     QCOMPARE(school.teacherOccupancy(teacher1, 5).size(), 1);
+
+    // 不挂老师的格子（如第 9 节体育活动）不进老师个人课表 —— 打印与 Excel 导出共用此处
+    school.schedule.setAssignment(class1, 6, 0, course1);
+    QCOMPARE(school.teacherOccupancy(teacher1, 6).size(), 1);
+    school.findPlanEntry(school.planEntries.first().id)->noLoad = true;
+    QCOMPARE(school.teacherOccupancy(teacher1, 6).size(), 0);
+    school.findPlanEntry(school.planEntries.first().id)->noLoad = false;
+    QCOMPARE(school.teacherOccupancy(teacher1, 6).size(), 1); // 去掉标记后照常显示
 }
 
 void TestModel::cascadeRemoveClass()

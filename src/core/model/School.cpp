@@ -286,6 +286,8 @@ QVector<ScheduleAssignment> School::teacherOccupancy(qint64 teacherId, int slotI
     for (const auto &e : planEntries) {
         if (!e.teacherIds.contains(teacherId))
             continue;
+        if (e.noLoad)
+            continue; // 不挂老师：老师个人课表（界面与打印导出共用此处）不显示这一格
         for (const auto &a : schedule.assignments) {
             if (a.classId == e.classId && a.courseId == e.courseId && a.slotIndex == slotIndex)
                 result.append(a);
