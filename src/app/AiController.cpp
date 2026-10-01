@@ -12,16 +12,16 @@
 #include <QTimer>
 #include <QUrl>
 
+#include "RelayConfig.h"
+
 namespace {
 // 不限制一次提问的工具调用轮数：复杂需求（如「逐班查一遍教学计划」）动辄几十轮，
 // 之前卡在 4 轮会让 AI 半途停住。改为只防「空转」——连续几轮要调的工具与参数完全相同才停，
 // 用户也随时可以点「取消」。
 constexpr int kSameToolRounds = 3;   // 连续几轮工具调用完全一致即判空转
 constexpr int kMaxPending = 20;      // 单轮最多挂起多少条变更（与设计约定一致）
-const char *kDefaultRelay = "https://api.class.feimsg.cn";
-// 应用令牌（应用级，可轮换；服务端 .env 中为 APP_TOKEN）
-const char *kDefaultToken =
-    "2627d9f4b6ec2d20892bb682276b650ca046d6b802dd6616a154af0d3903a92c";
+const char *kDefaultRelay = relay::kDefaultUrl;
+const char *kDefaultToken = relay::kDefaultToken;
 } // namespace
 
 AiController::AiController(AppController *app, QObject *parent)

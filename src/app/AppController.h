@@ -30,6 +30,14 @@ class AppController : public QObject
     Q_PROPERTY(bool projectDirty READ projectDirty NOTIFY projectDirtyChanged)
     Q_PROPERTY(QString schoolName READ schoolName NOTIFY projectChanged)
     Q_PROPERTY(QStringList recentFiles READ recentFiles NOTIFY recentFilesChanged)
+    // 内测门禁与反馈：QML 里要用属性绑定（visible/enabled/text），必须是 Q_PROPERTY
+    Q_PROPERTY(bool betaLocked READ betaLocked NOTIFY betaStateChanged)
+    Q_PROPERTY(bool betaBusy READ betaBusy NOTIFY betaStateChanged)
+    Q_PROPERTY(QString betaMessage READ betaMessage NOTIFY betaStateChanged)
+    Q_PROPERTY(QString deviceId READ deviceId NOTIFY betaStateChanged)
+    Q_PROPERTY(bool feedbackBusy READ feedbackBusy NOTIFY feedbackStateChanged)
+    Q_PROPERTY(bool feedbackOk READ feedbackOk NOTIFY feedbackStateChanged)
+    Q_PROPERTY(QString feedbackMessage READ feedbackMessage NOTIFY feedbackStateChanged)
     Q_PROPERTY(int classCount READ classCount NOTIFY statsChanged)
     Q_PROPERTY(int courseCount READ courseCount NOTIFY statsChanged)
     Q_PROPERTY(int teacherCount READ teacherCount NOTIFY statsChanged)
@@ -243,6 +251,24 @@ public:
     QString notifiedVersion() const { return m_notifiedVersion; }
     QString logFilePath() const;
 
+    // ---- 内测门禁：首次启动输邀请码，之后靠服务端「设备已通过」跳过 ----
+    QString deviceId() const;                    // 设备唯一标识（首次生成后写 QSettings）
+    bool betaLocked() const { return m_betaLocked; }
+    bool betaBusy() const { return m_betaBusy; }
+    QString betaMessage() const { return m_betaMessage; }
+    Q_INVOKABLE void checkBetaGate();            // 启动 / 点「重试」时调用
+    Q_INVOKABLE void submitInviteCode(const QString &code);
+    Q_INVOKABLE void quitApp();
+    void initBetaGate();                         // 启动时：先按本地缓存决定是否先锁上，再问服务端
+    void setBetaBypass(bool on);                 // 冒烟自检用：跳过门禁弹窗
+
+    // ---- 错误日志反馈 ----
+    bool feedbackBusy() const { return m_feedbackBusy; }
+    QString feedbackMessage() const { return m_feedbackMessage; }
+    bool feedbackOk() const { return m_feedbackOk; }
+    Q_INVOKABLE void sendFeedback(const QString &description, bool includeLog);
+    Q_INVOKABLE QString recentLogText() const;   // 弹窗里展示「将附带多少日志」
+
     // 版本号比较与「本次探测是否可信」的判定，抽成静态纯函数便于单测
     static int compareVersions(const QString &a, const QString &b);
     static bool updateProbeConclusive(const QString &tag, const QString &current, bool freshChannel);
@@ -283,6 +309,8 @@ Q_SIGNALS:
     void printSettingsChanged();
     void updateStatusChanged();
     void updateDlStateChanged();
+    void betaStateChanged();
+    void feedbackStateChanged();
 
 private:
     static QString toLocalPath(const QString &pathOrUrl);
@@ -418,4 +446,18 @@ private:
     QStringList m_downloadUrls; // 安装包下载通道（镜像优先，逐个回退）
     int m_dlAttempt = 0;
     void tryUpdateDownload();
+
+    // 内测门禁
+    bool m_betaLocked = false;      // true = 弹邀请码弹窗挡住主界面
+    bool m_betaBusy = false;        // 正在问服务端/提交邀请码
+    bool m_betaCached = false;      // 本地缓存的「已通过」（网络不通时据此放行）
+    bool m_betaBypassed = false;    // 冒烟自检模式：不查门禁
+    QString m_betaMessage;          // 弹窗里的提示/错误文案
+    void applyBetaStatus(const QJsonObject &obj);
+    void setBetaApproved(bool approved);
+
+    // 错误日志反馈
+    bool m_feedbackBusy = false;
+    bool m_feedbackOk = false;
+    QString m_feedbackMessage;
 };

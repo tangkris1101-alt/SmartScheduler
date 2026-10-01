@@ -9,7 +9,7 @@ setlocal enabledelayedexpansion
 cd /d %~dp0\..
 
 set VER=%~1
-if "%VER%"=="" set VER=1.0.43
+if "%VER%"=="" set VER=1.0.44
 
 set QTDIR=C:\Qt\6.8.1\mingw_64
 set PATH=C:\Qt\Tools\CMake_64\bin;C:\Qt\Tools\Ninja;C:\Qt\Tools\mingw1310_64\bin;%QTDIR%\bin;%PATH%

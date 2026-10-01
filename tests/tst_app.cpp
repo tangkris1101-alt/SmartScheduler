@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QTemporaryDir>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QGuiApplication>
@@ -1850,6 +1851,20 @@ void TestApp::versionAndUpdate()
     QVERIFY(toast.contains(QStringLiteral("$env:SS_TOAST_AUMID")));
     QVERIFY(!toast.contains(QLatin1Char('"')));
     QVERIFY(app.notifiedVersion().isEmpty()); // 还没下载过任何版本，不应弹过提醒
+
+    // 设备号：同一实例取值稳定，形如 UUID（内测门禁的登记键）
+    const QString dev1 = app.deviceId();
+    QCOMPARE(app.deviceId(), dev1);
+    QVERIFY(QRegularExpression(QStringLiteral("^[0-9a-f-]{36}$")).match(dev1).hasMatch());
+
+    // 反馈：描述与日志都空时只给提示，不该发请求
+    app.sendFeedback(QStringLiteral("   "), false);
+    QVERIFY(!app.feedbackOk());
+    QVERIFY(!app.feedbackBusy());
+    QVERIFY(app.feedbackMessage().contains(QStringLiteral("描述")));
+
+    // 门禁默认不锁（由 main 里 initBetaGate 决定），但状态查询接口可被调用而不崩
+    QVERIFY(!app.betaBusy());
 }
 
 void TestApp::logExport()

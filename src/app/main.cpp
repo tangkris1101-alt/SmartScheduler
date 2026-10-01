@@ -90,6 +90,13 @@ int main(int argc, char *argv[])
     // 注意：不要设置 applicationDisplayName —— Qt 会把它追加到窗口标题，造成重复
     app.setOrganizationName(QStringLiteral("SmartScheduler"));
     app.setWindowIcon(QIcon(QStringLiteral(":/qt/qml/SmartScheduler/icon.png")));
+    // --smoke=beta 用隔离的设置作用域：它会真的去问服务端门禁，不能污染真实设备号与「已通过」记录
+    const QStringList earlyArgs = app.arguments();
+    const bool betaSmoke = std::any_of(earlyArgs.cbegin(), earlyArgs.cend(), [](const QString &a) {
+        return a == QLatin1String("--smoke=beta");
+    });
+    if (betaSmoke)
+        app.setApplicationName(QStringLiteral("SmartSchedulerSmokeBeta"));
     initLogging(); // 须在设置组织/应用名之后：AppDataLocation 依赖它们
 
     AppController appController;
@@ -128,13 +135,17 @@ int main(int argc, char *argv[])
         &app,
         []() { QCoreApplication::exit(-1); },
         Qt::QueuedConnection);
-    // 冒烟自检模式：抑制新手引导弹窗，避免模态对话框吃掉注入的点击
+    // 冒烟自检 / 截图自检模式：抑制新手引导与内测门禁弹窗，避免模态对话框吃掉注入的点击或挡住截图
     const bool smokeMode = std::any_of(app.arguments().cbegin(), app.arguments().cend(),
                                        [](const QString &a) {
-                                           return a.startsWith(QStringLiteral("--smoke="));
+                                           return a.startsWith(QStringLiteral("--smoke="))
+                                                  || a.startsWith(QStringLiteral("--screenshot="));
                                        });
-    if (smokeMode)
+    if (smokeMode) {
         appController.setOnboardingShown(true);
+        appController.setBetaBypass(true);
+    }
+    appController.initBetaGate();
     engine.loadFromModule(QStringLiteral("SmartScheduler"), QStringLiteral("Main"));
 
     // 自检用：--screenshot=<file> 启动 2.5s 后抓取主窗口截图并退出（配合 QT_QPA_PLATFORM=offscreen）
@@ -185,7 +196,7 @@ int main(int argc, char *argv[])
                 appController.newProject(QStringLiteral("烟测旧校"), 5, 7, 4, 20);
                 prev = QDir::temp().filePath(QStringLiteral("smoke_prev.spk"));
                 if (!appController.saveProjectAs(prev)) {
-                    qWarning("smoke: 预存项目失败 %s", qPrintable(appController.lastError()));
+                    qWarning("smoke: 预存项目失败 %s", qUtf8Printable(appController.lastError()));
                     app.exit(3);
                     return;
                 }
@@ -196,9 +207,9 @@ int main(int argc, char *argv[])
                 app.exit(4);
                 return;
             }
-            fprintf(stderr, "[smoke] reopening %s\n", qPrintable(prev));
+            fprintf(stderr, "[smoke] reopening %s\n", qUtf8Printable(prev));
             if (!appController.openProject(prev)) {
-                qWarning("smoke: openProject 失败 %s", qPrintable(appController.lastError()));
+                qWarning("smoke: openProject 失败 %s", qUtf8Printable(appController.lastError()));
                 app.exit(5);
                 return;
             }
@@ -495,14 +506,14 @@ int main(int argc, char *argv[])
                     app.exit(33);
                     return;
                 }
-                qWarning("smoke-report: 指标 10 项、老师明细非空、截图 %s", qPrintable(shot));
+                qWarning("smoke-report: 指标 10 项、老师明细非空、截图 %s", qUtf8Printable(shot));
                 const QVariantMap rep = appController.qualityReport();
                 for (const auto &v : rep.value(QStringLiteral("indicators")).toList()) {
                     const QVariantMap m = v.toMap();
-                    qWarning("smoke-report: %s = %g / %g %s", qPrintable(m.value(QStringLiteral("name")).toString()),
+                    qWarning("smoke-report: %s = %g / %g %s", qUtf8Printable(m.value(QStringLiteral("name")).toString()),
                              m.value(QStringLiteral("value")).toDouble(),
                              m.value(QStringLiteral("required")).toDouble(),
-                             qPrintable(m.value(QStringLiteral("unit")).toString()));
+                             qUtf8Printable(m.value(QStringLiteral("unit")).toString()));
                 }
                 app.exit(0);
             });
@@ -521,7 +532,7 @@ int main(int argc, char *argv[])
             if (++(*ticks) > 240) { // 最多等 120 秒
                 timer->stop();
                 qWarning("smoke-ai: 超时（busy=%d pending=%d err=%s）", aiController.busy(),
-                         aiController.pendingCount(), qPrintable(aiController.lastError()));
+                         aiController.pendingCount(), qUtf8Printable(aiController.lastError()));
                 app.exit(51);
                 return;
             }
@@ -535,14 +546,14 @@ int main(int argc, char *argv[])
                 return;
             timer->stop();
             if (aiController.pendingCount() < 1) {
-                qWarning("smoke-ai: 未产生待办（err=%s）", qPrintable(aiController.lastError()));
+                qWarning("smoke-ai: 未产生待办（err=%s）", qUtf8Printable(aiController.lastError()));
                 app.exit(51);
                 return;
             }
             const int before = appController.school()->preAssignments.size();
             const QVariantMap card = aiController.pending().first().toMap();
-            qWarning("smoke-ai: 待办=%s | %s", qPrintable(card.value(QStringLiteral("tool")).toString()),
-                     qPrintable(card.value(QStringLiteral("summary")).toString()));
+            qWarning("smoke-ai: 待办=%s | %s", qUtf8Printable(card.value(QStringLiteral("tool")).toString()),
+                     qUtf8Printable(card.value(QStringLiteral("summary")).toString()));
             if (card.value(QStringLiteral("tool")).toString() != QLatin1String("batch_preassign")) {
                 qWarning("smoke-ai: 工具不是批量预排");
                 app.exit(51);
@@ -752,7 +763,7 @@ int main(int argc, char *argv[])
                 if (st->tries > 0) {
                     auto *fi = w->activeFocusItem();
                     const QString name = fi ? fi->objectName() : QString();
-                    qWarning("smoke-tab: 第%d次 Tab 焦点在 %s", st->tries, qPrintable(name));
+                    qWarning("smoke-tab: 第%d次 Tab 焦点在 %s", st->tries, qUtf8Printable(name));
                     if (name == QLatin1String("appButton"))
                         st->sawButton = true;
                     if (name == QLatin1String("navItem")) {
@@ -867,6 +878,58 @@ int main(int argc, char *argv[])
         timer->start(500);
     }
 
+    // 回归自检：--smoke=beta 走真实内测门禁接口（设置作用域已隔离）：
+    // 新设备 → 服务端说未通过 → 锁上；再提交一个错码 → 有明确提示且仍锁着。
+    // 0 通过，31=查完没锁上，32=错码竟然放行，33=超时
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("beta")) {
+        auto *stage = new int(0);
+        auto *ticks = new int(0);
+        QTimer *timer = new QTimer(&app);
+        QObject::connect(timer, &QTimer::timeout, &app,
+                         [&appController, &app, stage, ticks, timer]() {
+            if (++(*ticks) > 60) {
+                timer->stop();
+                qWarning("smoke-beta: 超时 stage=%d", *stage);
+                app.exit(33);
+                return;
+            }
+            if (appController.betaBusy())
+                return;
+            if (*stage == 0) {
+                appController.setBetaBypass(false);
+                appController.initBetaGate(); // 无缓存 → 先锁上，同时问服务端
+                *stage = 1;
+                return;
+            }
+            if (*stage == 1) {
+                qWarning("smoke-beta: 设备=%s 锁定=%d 提示=%s",
+                         qUtf8Printable(appController.deviceId()),
+                         appController.betaLocked(), qUtf8Printable(appController.betaMessage()));
+                if (!appController.betaLocked()) {
+                    timer->stop();
+                    qWarning("smoke-beta: 未登记设备竟然没被拦住");
+                    app.exit(31);
+                    return;
+                }
+                appController.submitInviteCode(QStringLiteral("NOPE-0000-NOPE-0000"));
+                *stage = 2;
+                return;
+            }
+            timer->stop();
+            const QString msg = appController.betaMessage();
+            qWarning("smoke-beta: 错码提示=%s 锁定=%d", qUtf8Printable(msg),
+                     appController.betaLocked());
+            if (!appController.betaLocked() || !msg.contains(QStringLiteral("不正确"))) {
+                qWarning("smoke-beta: 错误邀请码的处理不符合预期");
+                app.exit(32);
+                return;
+            }
+            qWarning("smoke-beta: 门禁行为正确（未通过要码、错码拦下）");
+            app.exit(0);
+        });
+        timer->start(500);
+    }
+
     // 回归自检：--smoke=toast 同步发一条 Windows 提醒，验证 powershell → WinRT toast 链路
     // （只验证「发出并被系统接收」，横幅是否显示取决于系统通知设置）
     // 0 通过，26=发送失败
@@ -906,12 +969,12 @@ int main(int argc, char *argv[])
                 if (us == 4) {
                     timer->stop();
                     qWarning("smoke-download: 检查更新失败 %s",
-                             qPrintable(appController.updateMessage()));
+                             qUtf8Printable(appController.updateMessage()));
                     app.exit(21);
                     return;
                 }
                 qWarning("smoke-download: 最新版 %s，开始下载",
-                         qPrintable(appController.latestVersion()));
+                         qUtf8Printable(appController.latestVersion()));
                 appController.downloadUpdate();
                 *stage = 1;
                 return;
@@ -922,7 +985,7 @@ int main(int argc, char *argv[])
             if (ds == 3) {
                 timer->stop();
                 qWarning("smoke-download: 下载失败 %s",
-                         qPrintable(appController.updateDlMessage()));
+                         qUtf8Printable(appController.updateDlMessage()));
                 app.exit(22);
                 return;
             }
@@ -940,14 +1003,14 @@ int main(int argc, char *argv[])
             if (appController.updateStatus() != 2 || readyMsg.isEmpty()
                 || !readyMsg.contains(appController.latestVersion())) {
                 qWarning("smoke-download: 已就绪状态下点检查无有效反馈 status=%d msg=%s",
-                         appController.updateStatus(), qPrintable(readyMsg));
+                         appController.updateStatus(), qUtf8Printable(readyMsg));
                 app.exit(25);
                 return;
             }
             if (!notified) {
                 qWarning("smoke-download: 下载就绪后没有发系统提醒（notified='%s' 最新版='%s'）",
-                         qPrintable(appController.notifiedVersion()),
-                         qPrintable(appController.latestVersion()));
+                         qUtf8Printable(appController.notifiedVersion()),
+                         qUtf8Printable(appController.latestVersion()));
                 app.exit(27);
                 return;
             }
@@ -958,8 +1021,8 @@ int main(int argc, char *argv[])
             if (!exes.isEmpty())
                 fs = QFileInfo(d.filePath(exes.first())).size();
             qWarning("smoke-download: 就绪，文件=%s 大小=%lld；点检查反馈=「%s」；系统提醒=%s",
-                     qPrintable(exes.value(0)), (long long)fs, qPrintable(readyMsg),
-                     qPrintable(appController.notifiedVersion()));
+                     qUtf8Printable(exes.value(0)), (long long)fs, qUtf8Printable(readyMsg),
+                     qUtf8Printable(appController.notifiedVersion()));
             app.exit(!exes.isEmpty() && fs > 5 * 1024 * 1024 ? 0 : 24);
         });
         timer->start(1000);

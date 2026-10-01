@@ -1,6 +1,7 @@
 #include "AppController.h"
 
 #include "ExcelIo.h"
+#include "RelayConfig.h"
 #include "SchedulerEngine.h"
 #include "metrics/QualityMetrics.h"
 
@@ -20,7 +21,9 @@
 #include <QProcess>
 #include <QSet>
 #include <QSettings>
+#include <QUuid>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QTimer>
 #include <QUrl>
 #include <algorithm>
@@ -2881,6 +2884,221 @@ void AppController::sendTestNotification()
     qInfo("系统提醒: 发送测试通知");
     showWindowsToast(tr("智排课系统"),
                      tr("这是一条测试提醒。更新下载完成后，会这样通知你点「安装更新」。"));
+}
+
+// ---- 内测门禁 ----
+
+QString AppController::deviceId() const
+{
+    QSettings s;
+    QString id = s.value(QStringLiteral("beta/deviceId")).toString();
+    if (id.isEmpty()) {
+        id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        s.setValue(QStringLiteral("beta/deviceId"), id);
+    }
+    return id;
+}
+
+void AppController::initBetaGate()
+{
+    // 先按本地缓存决定是否立刻锁上（避免开窗瞬间露脸），再问服务端复核
+    m_betaCached = QSettings().value(QStringLiteral("beta/approved"), false).toBool();
+    m_betaLocked = !m_betaCached;
+    m_betaMessage.clear();
+    Q_EMIT betaStateChanged();
+    checkBetaGate();
+}
+
+void AppController::setBetaBypass(bool on)
+{
+    // 冒烟自检模式：别让邀请码弹窗吃掉注入的点击
+    m_betaBypassed = on;
+    if (!on)
+        return;
+    m_betaLocked = false;
+    Q_EMIT betaStateChanged();
+}
+
+void AppController::setBetaApproved(bool approved)
+{
+    m_betaCached = approved;
+    m_betaLocked = !approved;
+    QSettings().setValue(QStringLiteral("beta/approved"), approved);
+    Q_EMIT betaStateChanged();
+}
+
+void AppController::checkBetaGate()
+{
+    if (m_betaBypassed)
+        return;
+    if (!m_nam)
+        m_nam = new QNetworkAccessManager(this);
+    m_betaBusy = true;
+    m_betaMessage.clear();
+    Q_EMIT betaStateChanged();
+
+    const QString url = QStringLiteral("%1/v1/invite/status?device=%2")
+                            .arg(QString::fromLatin1(relay::kDefaultUrl), deviceId());
+    QNetworkRequest req{QUrl(url)};
+    req.setRawHeader("User-Agent", "SmartScheduler-BetaGate");
+    req.setTransferTimeout(8000);
+    QNetworkReply *reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        m_betaBusy = false;
+        if (reply->error() != QNetworkReply::NoError) {
+            // 服务端问不到：已通过过的设备照常放行（不想因为一次断网把人锁在门外），否则提示重试
+            m_betaMessage = m_betaCached
+                    ? tr("（暂时连不上内测服务器，已按上次通过的记录放行）")
+                    : tr("连不上内测服务器，请检查网络后点「重试」。");
+            qWarning("内测门禁: 查询失败（%s）", qPrintable(reply->errorString()));
+            Q_EMIT betaStateChanged();
+            return;
+        }
+        const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
+        applyBetaStatus(obj);
+    });
+}
+
+void AppController::applyBetaStatus(const QJsonObject &obj)
+{
+    if (!obj.value(QStringLiteral("gate")).toBool(false)) {
+        // 服务端没启用门禁（未配邀请码）：直接放行
+        m_betaMessage.clear();
+        if (m_betaLocked) {
+            m_betaLocked = false;
+            Q_EMIT betaStateChanged();
+        }
+        return;
+    }
+    const bool approved = obj.value(QStringLiteral("approved")).toBool(false);
+    setBetaApproved(approved);
+    m_betaMessage = approved ? QString() : tr("首次使用请输入内测邀请码。");
+    Q_EMIT betaStateChanged();
+}
+
+void AppController::submitInviteCode(const QString &code)
+{
+    if (m_betaBusy)
+        return;
+    if (code.trimmed().isEmpty()) {
+        m_betaMessage = tr("请先填写邀请码。");
+        Q_EMIT betaStateChanged();
+        return;
+    }
+    if (!m_nam)
+        m_nam = new QNetworkAccessManager(this);
+    m_betaBusy = true;
+    m_betaMessage.clear();
+    Q_EMIT betaStateChanged();
+
+    const QJsonObject body{{QStringLiteral("code"), code.trimmed()},
+                           {QStringLiteral("device"), deviceId()},
+                           {QStringLiteral("app"), appVersion()}};
+    QNetworkRequest req{QUrl(QStringLiteral("%1/v1/invite/verify")
+                                 .arg(QString::fromLatin1(relay::kDefaultUrl)))};
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    req.setRawHeader("User-Agent", "SmartScheduler-BetaGate");
+    req.setTransferTimeout(10000);
+    QNetworkReply *reply = m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        m_betaBusy = false;
+        const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString serverMsg = obj.value(QStringLiteral("error")).toString();
+            m_betaMessage = serverMsg.isEmpty() ? tr("提交失败：%1").arg(reply->errorString())
+                                                : serverMsg;
+            qWarning("内测门禁: 邀请码校验失败（%s）", qPrintable(m_betaMessage));
+            Q_EMIT betaStateChanged();
+            return;
+        }
+        if (!obj.value(QStringLiteral("gate")).toBool(true)) { // 服务端未启用门禁
+            setBetaApproved(true);
+            return;
+        }
+        const bool approved = obj.value(QStringLiteral("approved")).toBool(false);
+        if (approved) {
+            qInfo("内测门禁: 邀请码通过，设备已登记 %s", qPrintable(deviceId()));
+            setBetaApproved(true);
+        } else {
+            m_betaMessage = tr("邀请码不正确。");
+            Q_EMIT betaStateChanged();
+        }
+    });
+}
+
+void AppController::quitApp()
+{
+    QMetaObject::invokeMethod(QCoreApplication::instance(), "quit", Qt::QueuedConnection);
+}
+
+// ---- 错误日志反馈 ----
+
+QString AppController::recentLogText() const
+{
+    // 日志按 2MB 轮转，只带最后 400KB，够定位问题又不至于把请求撑爆
+    constexpr qint64 kTail = 400 * 1024;
+    QFile f(logFilePath());
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    const qint64 size = f.size();
+    if (size > kTail) {
+        f.seek(size - kTail);
+        f.readLine(); // 丢掉半行
+    }
+    return QString::fromUtf8(f.readAll());
+}
+
+void AppController::sendFeedback(const QString &description, bool includeLog)
+{
+    if (m_feedbackBusy)
+        return;
+    const QString log = includeLog ? recentLogText() : QString();
+    if (description.trimmed().isEmpty() && log.isEmpty()) {
+        m_feedbackOk = false;
+        m_feedbackMessage = tr("请写点问题描述，或勾选「附带最近日志」。");
+        Q_EMIT feedbackStateChanged();
+        return;
+    }
+    if (!m_nam)
+        m_nam = new QNetworkAccessManager(this);
+    m_feedbackBusy = true;
+    m_feedbackOk = false;
+    m_feedbackMessage.clear();
+    Q_EMIT feedbackStateChanged();
+
+    const QJsonObject body{{QStringLiteral("device"), deviceId()},
+                           {QStringLiteral("app"), appVersion()},
+                           {QStringLiteral("os"), QSysInfo::prettyProductName()},
+                           {QStringLiteral("description"), description},
+                           {QStringLiteral("log"), log}};
+    QNetworkRequest req{QUrl(QStringLiteral("%1/v1/feedback")
+                                 .arg(QString::fromLatin1(relay::kDefaultUrl)))};
+    req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    req.setRawHeader("X-App-Token", QByteArray(relay::kDefaultToken));
+    req.setRawHeader("User-Agent", "SmartScheduler-Feedback");
+    req.setTransferTimeout(30000);
+    QNetworkReply *reply = m_nam->post(req, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        m_feedbackBusy = false;
+        const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString serverMsg = obj.value(QStringLiteral("error")).toString();
+            m_feedbackOk = false;
+            m_feedbackMessage = serverMsg.isEmpty()
+                    ? tr("发送失败：%1").arg(reply->errorString()) : serverMsg;
+            qWarning("反馈: 发送失败（%s）", qPrintable(m_feedbackMessage));
+            Q_EMIT feedbackStateChanged();
+            return;
+        }
+        m_feedbackOk = true;
+        m_feedbackMessage = tr("已收到，编号 %1。可以把编号告诉开发者，便于对齐日志。")
+                                .arg(obj.value(QStringLiteral("id")).toString());
+        qInfo("反馈: 已提交 %s", qPrintable(obj.value(QStringLiteral("id")).toString()));
+        Q_EMIT feedbackStateChanged();
+    });
 }
 
 void AppController::checkUpdate()

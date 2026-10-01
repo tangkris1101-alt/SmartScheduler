@@ -170,14 +170,38 @@ ApplicationWindow {
         }
     }
 
-    // 首次启动显示新手引导
+    // 首次启动显示新手引导；内测门禁锁着时先把门禁弹窗顶上来
     Component.onCompleted: {
+        if (app.betaLocked)
+            betaGateDialog.open()
         if (!app.onboardingShown())
             onboardingDialog.open()
     }
 
     OnboardingDialog {
         id: onboardingDialog
+        parent: Overlay.overlay
+    }
+
+    // 内测门禁：app.betaLocked 时挡住主界面。
+    // 注意不能写 visible: app.betaLocked —— Popup 的 visible 是开关语义，绑定会自反馈成死循环；
+    // 改为监听状态变化调 open/close，并在窗口建好后补一次初始状态（initBetaGate 早于 QML 加载）。
+    BetaGateDialog {
+        id: betaGateDialog
+        parent: Overlay.overlay
+    }
+    Connections {
+        target: app
+        function onBetaStateChanged() {
+            if (app.betaLocked)
+                betaGateDialog.open()
+            else
+                betaGateDialog.close()
+        }
+    }
+
+    FeedbackDialog {
+        id: feedbackDialog
         parent: Overlay.overlay
     }
 
@@ -287,6 +311,11 @@ ApplicationWindow {
                     onClicked: installConfirmDialog.open()
                 }
 
+                AppButton {
+                    text: qsTr("🐞 反馈")
+                    variant: "subtle"
+                    onClicked: feedbackDialog.open()
+                }
                 AppButton {
                     text: "↶"
                     variant: "subtle"
