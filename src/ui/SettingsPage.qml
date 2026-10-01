@@ -12,7 +12,9 @@ Item {
     function updateStatusText() {
         switch (app.updateStatus) {
         case 1: return qsTr("正在检查更新…")
-        case 2: return qsTr("✓ 当前已是最新版本（v%1）").arg(app.appVersion)
+        case 2: return app.updateMessage !== ""
+                       ? app.updateMessage
+                       : qsTr("✓ 当前已是最新版本（v%1）").arg(app.appVersion)
         case 3: return app.updateMessage !== "" ? app.updateMessage
                                                 : qsTr("发现新版本 %1，正在自动下载…").arg(app.latestVersion)
         case 4: return app.updateMessage

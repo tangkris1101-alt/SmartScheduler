@@ -2823,8 +2823,19 @@ void AppController::checkUpdate(bool interactive)
 {
     if (m_updateStatus == 1) // 防止重复触发（手动/定时会撞车）
         return;
-    if (m_updateDlState == 1 || m_updateDlState == 2)
-        return; // 正在下载或已下载好，不必再查
+    if (m_updateDlState == 1)
+        return; // 正在下载：先让它跑完
+    if (m_updateDlState == 2) {
+        // 已下载好一版但还没安装：不重复检查（免得把已就绪的安装包作废），
+        // 但手动点击必须给出反馈——否则按钮看起来「点了没反应」
+        if (interactive) {
+            m_updateStatus = 2;
+            m_updateMessage = tr("新版本 %1 已下载完成，点击上方「安装更新」即可升级。")
+                                  .arg(m_latestVersion);
+            Q_EMIT updateStatusChanged();
+        }
+        return;
+    }
     if (!m_nam)
         m_nam = new QNetworkAccessManager(this);
     if (interactive)
@@ -2878,7 +2889,7 @@ void AppController::finishUpdateProbe()
         m_latestSetup = m_probeSetup;
         m_latestSha256 = m_probeSha256;
         m_latestSize = m_probeSize;
-        m_updateMessage = tr("当前已是最新版本。");
+        m_updateMessage = tr("✓ 当前已是最新版本（v%1）").arg(appVersion());
         if (!m_freshChannelAnswered)
             qWarning("检查更新: 实时通道均不可达，结论只依据缓存通道，可能滞后");
         Q_EMIT updateStatusChanged();
@@ -2974,7 +2985,7 @@ void AppController::tryUpdateSource()
         }
         m_updateStatus = 2;
         m_latestVersion = tag;
-        m_updateMessage = tr("当前已是最新版本。");
+        m_updateMessage = tr("✓ 当前已是最新版本（v%1）").arg(appVersion());
         if (channel.fresh)
             m_freshChannelAnswered = true;
         Q_EMIT updateStatusChanged();
