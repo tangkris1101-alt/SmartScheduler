@@ -211,7 +211,7 @@ Item {
                         id: toastTestHint
                         Layout.fillWidth: true
                         visible: false
-                        text: qsTr("已发出测试提醒。若桌面右下角没有弹出横幅，请到「Windows 设置 → 系统 → 通知和操作」确认通知已开启；提醒本身仍会留在通知中心。")
+                        text: qsTr("已发出测试提醒。若桌面右下角没弹横幅：全屏应用在前台时 Windows 会暂不显示横幅（提醒仍会留在通知中心，切回桌面即可看到）；若长期不弹，请到「Windows 设置 → 系统 → 通知和操作」确认通知已开启。")
                         color: Theme.textSecondary
                         font.pixelSize: Theme.fontCaption
                         wrapMode: Text.WordWrap
