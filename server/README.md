@@ -31,8 +31,10 @@ server/
 鉴权：请求头 `X-App-Token: <应用令牌>`；`X-Client-Version` 可选（用于审计）。
 `/v1/health` 与 `/v1/version` 匿名可用（客户端检查更新时尚无令牌上下文）。
 
-限额（均可用环境变量覆盖）：单 IP 5 分钟 40 次、单请求 max_tokens ≤ 4096、
-并发 ≤ 4、工具数 ≤ 40、当日 token 预算 200 万。
+限额（均可用环境变量覆盖）：单 IP 5 分钟 400 次、并发 ≤ 4、当日 token 预算 200 万。
+**工具数量与 max_tokens 不封顶**：客户端一次复杂提问（如逐班查询）可能连发几十个请求，
+`max_tokens` 原样透传给上游（客户端不给就不传，由模型自己定）；需要收紧时用
+`MAX_TOOLS` / `MAX_TOKENS_CAP` / `DEFAULT_MAX_TOKENS` / `IP_MAX_REQUESTS` 给具体数值。
 
 ## 部署（CI/CD 自动）
 

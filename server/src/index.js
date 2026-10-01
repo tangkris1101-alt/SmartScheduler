@@ -3,7 +3,8 @@
 // 设计要点：
 //  - 工具（tools）由客户端下发，服务端只做透传与限额，所以客户端加工具无需改服务端；
 //  - 鉴权：X-App-Token（应用令牌），常量时间比较；
-//  - 限额：按 IP 每分钟请求数、按令牌每日 token 预算、并发上限、单请求 max_tokens 上限；
+//  - 限额：按 IP 的请求窗口、按令牌的每日 token 预算、并发上限；工具数量与 max_tokens 不封顶
+//    （客户端一次复杂提问可能连发几十个请求，靠 IP 窗口与每日预算兜底）；
 //  - 审计：每次请求落一行 JSONL（不含对话内容，只记用量与耗时）；
 //  - 流式：默认 SSE 透传；客户端请求 stream=false 时返回普通 JSON（便于早期联调与测试）。
 import express from 'express';
@@ -23,13 +24,16 @@ const cfg = {
     upstreamBase: process.env.UPSTREAM_BASE || 'https://api.deepseek.com',
     upstreamKey: process.env.UPSTREAM_KEY || '',
     defaultModel: process.env.DEFAULT_MODEL || 'deepseek-flash',
-    maxTokensCap: Number(process.env.MAX_TOKENS_CAP || 4096),
-    defaultMaxTokens: Number(process.env.DEFAULT_MAX_TOKENS || 1024),
+    // 0 = 不限制：max_tokens 原样透传给上游（客户端没给就不传，由模型自己定）；
+    // 工具数量同样不设上限。需要收紧时用环境变量给具体数值即可。
+    maxTokensCap: Number(process.env.MAX_TOKENS_CAP || 0),
+    defaultMaxTokens: Number(process.env.DEFAULT_MAX_TOKENS || 0),
     dailyTokenBudget: Number(process.env.DAILY_TOKEN_BUDGET || 2000000),
     ipWindowMs: Number(process.env.IP_WINDOW_MS || 300000), // 5 分钟
-    ipMaxRequests: Number(process.env.IP_MAX_REQUESTS || 40),
+    // 工具调用不设轮数上限，客户端一次提问可能连发几十个请求；这里只留一个防滥用上限
+    ipMaxRequests: Number(process.env.IP_MAX_REQUESTS || 400),
     maxConcurrent: Number(process.env.MAX_CONCURRENT || 4),
-    maxTools: Number(process.env.MAX_TOOLS || 40),
+    maxTools: Number(process.env.MAX_TOOLS || 0),
     logDir: process.env.LOG_DIR || join(APP_DIR, 'logs'),
     version: '1.0.0',
 };
@@ -182,7 +186,7 @@ function validate(body) {
     if (tools !== undefined) {
         if (!Array.isArray(tools))
             return 'tools 必须是数组';
-        if (tools.length > cfg.maxTools)
+        if (cfg.maxTools > 0 && tools.length > cfg.maxTools)
             return `tools 过多（最多 ${cfg.maxTools} 个）`;
         for (const t of tools) {
             if (!t?.function?.name || typeof t.function.name !== 'string')
@@ -263,9 +267,15 @@ app.post('/v1/ai/orchestrate', async (req, res) => {
         tools: req.body.tools,
         tool_choice: req.body.tool_choice || (req.body.tools?.length ? 'auto' : undefined),
         temperature: typeof req.body.temperature === 'number' ? req.body.temperature : 0.2,
-        max_tokens: Math.min(Number(req.body.max_tokens) || cfg.defaultMaxTokens, cfg.maxTokensCap),
         stream,
     };
+    // max_tokens：客户端给了就原样透传（默认不封顶），没给且没配默认值就不传，交给上游模型自己定。
+    // 之前默认封在 1024，长回答会被截断。
+    const asked = Number(req.body.max_tokens);
+    if (asked > 0)
+        payload.max_tokens = cfg.maxTokensCap > 0 ? Math.min(asked, cfg.maxTokensCap) : asked;
+    else if (cfg.defaultMaxTokens > 0)
+        payload.max_tokens = cfg.defaultMaxTokens;
     if (stream)
         payload.stream_options = { include_usage: true };
 

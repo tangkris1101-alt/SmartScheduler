@@ -27,6 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---- 假上游：发布接口（版本检查用）+ SSE 返回一段带 tool_calls 与 usage 的数据
 let releaseHits = 0;
 let releaseBroken = false;
+let lastPayload = null; // 最近一次转发给上游的请求体，用于断言限额已取消
 const FAKE_RELEASE = {
     tag_name: 'v9.9.9',
     published_at: '2026-01-01T00:00:00Z',
@@ -53,6 +54,7 @@ const upstream = createServer((req, res) => {
     req.on('data', (c) => (body += c));
     req.on('end', () => {
         const payload = JSON.parse(body || '{}');
+        lastPayload = payload;
         if (!payload.stream) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
@@ -170,6 +172,27 @@ async function main() {
     }).then((r) => r.json());
     check('返回 tool_calls', json.choices?.[0]?.message?.tool_calls?.length === 1);
     check('返回 usage', json.usage?.total_tokens === undefined && json.usage?.prompt_tokens === 11);
+
+    console.log('限额：工具数与 max_tokens 不再封顶');
+    const manyTools = Array.from({ length: 50 }, (_, i) => ({
+        type: 'function', function: { name: `tool_${i}` },
+    }));
+    const big = await fetch(`${base}/v1/ai/orchestrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }],
+                               tools: manyTools, max_tokens: 99999, stream: false }),
+    });
+    check('50 个工具不再被拒', big.status === 200, `status=${big.status}`);
+    check('客户端 max_tokens 原样透传', lastPayload?.max_tokens === 99999,
+          `max_tokens=${lastPayload?.max_tokens}`);
+    await fetch(`${base}/v1/ai/orchestrate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-App-Token': APP_TOKEN },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }], stream: false }),
+    });
+    check('未指定 max_tokens 时不带上游', lastPayload?.max_tokens === undefined,
+          `max_tokens=${lastPayload?.max_tokens}`);
 
     console.log('流式透传（SSE）');
     const sse = await fetch(`${base}/v1/ai/orchestrate`, {
