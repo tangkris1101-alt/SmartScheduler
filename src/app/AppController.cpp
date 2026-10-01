@@ -292,6 +292,9 @@ QVariantMap AppController::aiRunReadTool(const QString &tool, const QVariantMap 
                                            {QStringLiteral("先后公平"), r.avgFairness},
                                            {QStringLiteral("综合"), r.avgComposite}}}});
     }
+    QVariantMap extra;
+    if (aiRunReadToolExtra(tool, args, &extra))
+        return extra;
     return err(tr("未知的只读工具：%1").arg(tool));
 }
 
@@ -639,6 +642,8 @@ AppController::AiOpPlan AppController::planAiOperation(const QString &tool,
         return p;
     }
 
+    if (planAiOperationExtra(tool, args, &p))
+        return p;
     p.error = tr("未知的变更工具：%1").arg(tool);
     return p;
 }
@@ -680,6 +685,7 @@ QVariantMap AppController::applyAiOperations(const QVariantList &ops)
             continue;
         }
         QVariantMap r;
+        QVariantMap ext;
         if (tool == QLatin1StringView("batch_preassign")) {
             r = batchSetPreassignmentsImpl(p.courseId, p.classIds, p.slots, p.conflictMode, p.half);
             changed = changed || r.value(QStringLiteral("set")).toInt() > 0;
@@ -713,6 +719,9 @@ QVariantMap AppController::applyAiOperations(const QVariantList &ops)
             } else {
                 r = QVariantMap{{QStringLiteral("moved"), 0}};
             }
+        } else if (applyAiOperationExtra(tool, p, &ext)) {
+            r = ext;
+            changed = changed || r.value(QStringLiteral("changed")).toBool();
         } else {
             results.append(QVariantMap{{QStringLiteral("tool"), tool},
                                        {QStringLiteral("ok"), false},
@@ -880,6 +889,7 @@ QVariantList AppController::aiTools() const
                 toolParam(QStringLiteral("number"), tr("新的周节数"))}},
               {QStringLiteral("courseName"), QStringLiteral("classNames"),
                QStringLiteral("weeklyPeriods")});
+    out += aiToolSchemasExtra();
     out << fn(QStringLiteral("move_cell"),
               tr("调课：把某班某格的课挪到另一格（整节）"),
               {{QStringLiteral("className"), toolParam(QStringLiteral("string"), tr("班级名"))},
@@ -913,6 +923,7 @@ void AppController::makeBatchBackup(const QString &label)
     m_batchBackup.noSchedule = m_school.noScheduleConstraints;
     m_batchBackup.planEntries = m_school.planEntries;
     m_batchBackup.schedule = m_school.schedule;
+    m_batchBackup.timeSyncGroups = m_school.timeSyncGroups;
     m_batchBackup.label = label;
     m_hasBatchBackup = true;
 }
@@ -932,6 +943,7 @@ bool AppController::undoLastBatch()
     m_school.noScheduleConstraints = m_batchBackup.noSchedule;
     m_school.planEntries = m_batchBackup.planEntries;
     m_school.schedule = m_batchBackup.schedule;
+    m_school.timeSyncGroups = m_batchBackup.timeSyncGroups;
     discardBatchBackup();
     markDirty();
     Q_EMIT projectChanged();

@@ -101,6 +101,22 @@ public:
     // 返回 {created, groups:[{name, memberCount}]}；名称不含数字时不建组
     Q_INVOKABLE QVariantMap addClassesWithAutoGroup(const QStringList &names);
 
+    // ---- 计划/老师批量编辑（界面与 AI 工具共用）----
+    Q_INVOKABLE QVariantMap batchSetPlanChained(qint64 courseId, const QVariantList &classIds,
+                                                int times, int length);
+    Q_INVOKABLE QVariantMap batchSetPlanEarlyPeriods(qint64 courseId, const QVariantList &classIds,
+                                                     int earlyPeriods);
+    Q_INVOKABLE QVariantMap batchSetPlanTeachers(qint64 courseId, const QVariantList &classIds,
+                                                 const QVariantList &teacherIds, bool rotate);
+    Q_INVOKABLE QVariantMap batchSetTeacherDailyMax(const QVariantList &teacherIds, int maxPerDay);
+    Q_INVOKABLE QVariantMap batchSetNoScheduleByGroup(qint64 groupId, const QVariantList &slots,
+                                                      bool forbidden);
+    // ---- 同时段组（走班）----
+    Q_INVOKABLE QVariantList timeSyncGroups() const;
+    Q_INVOKABLE qint64 createTimeSyncGroup(const QString &name, const QVariantList &entries);
+    Q_INVOKABLE bool removeTimeSyncGroup(qint64 id);
+    qint64 createTimeSyncGroupByIds(const QString &name, const QVariantList &idPairs);
+
     // ---- 批量操作（一次设置/清除，支持整体撤销；对象集合由界面传入）----
     Q_INVOKABLE QVariantList groupMemberIds(qint64 groupId) const; // 组成员 id（按教研组批量勾选用）
     // 批量固定预排：conflictMode 0=跳过已有 1=覆盖。返回 {set, skipped, occupied, affected}
@@ -279,9 +295,31 @@ private:
         qint64 moveClassId = -1;
         int moveFromSlot = -1;
         int moveToSlot = -1;
+        int chainedTimes = 0;
+        int chainedLength = 2;
+        int earlyPeriods = -1;
+        QVariantList teacherIds;
+        bool rotateTeachers = false;
+        int dailyMax = -1;
+        qint64 groupId = -1;
+        QString groupName;
+        QVariantList syncEntries; // [{classId, courseId}]
     };
 
     // 批量操作的实现（不含快照；包装函数与 AI 多步应用共用）
+    // 工具扩展（实现在 AiToolsExtra.cpp）
+    bool aiRunReadToolExtra(const QString &tool, const QVariantMap &args, QVariantMap *out) const;
+    QVariantList aiToolSchemasExtra() const;
+    bool planAiOperationExtra(const QString &tool, const QVariantMap &args, AiOpPlan *out) const;
+    bool applyAiOperationExtra(const QString &tool, const AiOpPlan &plan, QVariantMap *out);
+    QVariantMap batchSetPlanChainedImpl(qint64 courseId, const QVariantList &classIds, int times,
+                                        int length);
+    QVariantMap batchSetPlanEarlyPeriodsImpl(qint64 courseId, const QVariantList &classIds,
+                                             int earlyPeriods);
+    QVariantMap batchSetPlanTeachersImpl(qint64 courseId, const QVariantList &classIds,
+                                         const QVariantList &teacherIds, bool rotate);
+    QVariantMap batchSetTeacherDailyMaxImpl(const QVariantList &teacherIds, int maxPerDay);
+
     QVariantMap batchSetPreassignmentsImpl(qint64 courseId, const QVariantList &classIds,
                                            const QVariantList &slots, int conflictMode, int half);
     QVariantMap batchClearPreassignmentsImpl(qint64 courseId, const QVariantList &classIds,
@@ -299,6 +337,7 @@ private:
         QVector<sched::NoScheduleConstraint> noSchedule;
         QVector<sched::PlanEntry> planEntries;
         sched::Schedule schedule; // AI 调课也要能一并撤销
+        QVector<sched::TimeSyncGroup> timeSyncGroups;
         QString label;
     };
     void makeBatchBackup(const QString &label);

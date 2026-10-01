@@ -41,6 +41,8 @@ public:
     const School &school;
     QVector<Session> sessions;
     QVector<Placement> placements;
+    QHash<int, QVector<int>> m_syncPeers; // 会话 → 同组同课次的其它会话
+    void buildSyncPeers();
 
     // ---- 占用 ----
     void apply(int s, int slot, int half);
@@ -52,7 +54,12 @@ public:
 
     // ---- 硬约束 ----
     static constexpr int kIllegal = 1000000; // 非法位置（如连课跨天）
-    int hardAt(int s, int slot, int half) const; // s 放入该位置后参与的硬冲突数
+    int hardAt(int s, int slot, int half) const;   // 含同时段组联动检查
+    int hardAtNoSync(int s, int slot, int half) const; // 仅本会话自身约束
+    // 同时段组（走班）：把 s 与它的同组同课次会话一起落位 / 一起撤销
+    void placeWithSync(int s, int slot, int half);
+    void removeWithSync(int s);
+    QVector<int> syncPeers(int s) const { return m_syncPeers.value(s); } // s 放入该位置后参与的硬冲突数
     bool placeable(int s, int slot, int half) const { return hardAt(s, slot, half) == 0; }
     int hardViolations() const; // 全局硬违例（含未排会话）
 

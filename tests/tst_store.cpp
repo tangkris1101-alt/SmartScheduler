@@ -135,6 +135,12 @@ static School makeSampleSchool()
     cg.entries = {{class1, courseTiyu}, {class2, courseTiyu}};
     school.addCombinedGroup(cg);
 
+    // 同时段组（走班，schema v4）
+    TimeSyncGroup sg;
+    sg.name = QStringLiteral("走班1");
+    sg.entries = {{class1, courseYuwen}, {class2, courseShuxue}};
+    school.addTimeSyncGroup(sg);
+
     // 不排课：张老师 周一上午1-3节 不排
     NoScheduleConstraint ns1;
     ns1.entityType = NoScheduleConstraint::EntityType::Teacher;
@@ -218,6 +224,7 @@ void TestStore::roundTrip()
     QCOMPARE(loaded.groups, original.groups);
     QCOMPARE(loaded.planEntries, original.planEntries);
     QCOMPARE(loaded.combinedGroups, original.combinedGroups);
+    QCOMPARE(loaded.timeSyncGroups, original.timeSyncGroups);
     QCOMPARE(loaded.noScheduleConstraints, original.noScheduleConstraints);
     QCOMPARE(loaded.preAssignments, original.preAssignments);
     QCOMPARE(loaded.teacherActivities, original.teacherActivities);
@@ -267,6 +274,8 @@ void TestStore::migrateFromV1()
         QVERIFY(q.exec(QStringLiteral("ALTER TABLE entity_groups DROP COLUMN mask_days")));
         QVERIFY(q.exec(QStringLiteral("ALTER TABLE entity_groups DROP COLUMN mask_periods")));
         QVERIFY(q.exec(QStringLiteral("ALTER TABLE preassign DROP COLUMN half")));
+        QVERIFY(q.exec(QStringLiteral("DROP TABLE IF EXISTS time_sync_group_members")));
+        QVERIFY(q.exec(QStringLiteral("DROP TABLE IF EXISTS time_sync_groups")));
         QVERIFY(q.exec(QStringLiteral("ALTER TABLE plan_entries DROP COLUMN early_periods")));
         QVERIFY(q.exec(QStringLiteral("UPDATE meta SET value='1' WHERE key='schema_version'")));
         db.close();

@@ -82,6 +82,7 @@ Problem::Problem(const School &s)
     expandSessions();
     mergeCombined();
     applyPreAssignments();
+    buildSyncPeers();
     placements.resize(sessions.size());
 }
 
@@ -287,7 +288,97 @@ void Problem::remove(int s)
     }
 }
 
+// 建立「同时段组」的会话映射：组内每个成员的第 k 次课互相同步
+void Problem::buildSyncPeers()
+{
+    m_syncPeers.clear();
+    for (const TimeSyncGroup &g : school.timeSyncGroups) {
+        QVector<QVector<int>> members; // 每个成员的会话列表（按会话序号）
+        for (const auto &m : g.entries) {
+            QVector<int> list;
+            for (int i = 0; i < sessions.size(); ++i) {
+                const Session &s = sessions[i];
+                if (s.classIds.size() == 1 && s.classIds.first() == m.first
+                    && s.courseId == m.second)
+                    list.append(i);
+            }
+            members.append(list);
+        }
+        int maxK = 0;
+        for (const auto &l : members)
+            maxK = std::max(maxK, int(l.size()));
+        for (int k = 0; k < maxK; ++k) {
+            QVector<int> peers;
+            for (const auto &l : members) {
+                if (k < l.size())
+                    peers.append(l[k]);
+            }
+            for (int a : peers) {
+                for (int b : peers) {
+                    if (a != b)
+                        m_syncPeers[a].append(b);
+                }
+            }
+        }
+    }
+}
+
+// 含同时段组联动的硬约束检查：s 要与已落位的同组会话同节同半周，
+// 并且（对未落位的同组会话而言）这个位置对它们也必须合法
 int Problem::hardAt(int s, int slot, int half) const
+{
+    int v = hardAtNoSync(s, slot, half);
+    if (v >= kIllegal)
+        return v;
+    const auto it = m_syncPeers.constFind(s);
+    if (it == m_syncPeers.constEnd())
+        return v;
+    for (int peer : it.value()) {
+        const Placement &pl = placements[peer];
+        if (pl.slot >= 0) {
+            if (pl.slot != slot || pl.half != half)
+                return kIllegal; // 同组必须同节同半周
+            continue;
+        }
+        const int pv = hardAtNoSync(peer, slot, half);
+        if (pv >= kIllegal)
+            return kIllegal; // 该位置放不下同组的另一个班
+        v = std::max(v, pv);
+    }
+    return v;
+}
+
+// 落位：s 与它的同组会话一起放下去（已固定或已落位的不动）
+void Problem::placeWithSync(int s, int slot, int half)
+{
+    apply(s, slot, half);
+    const auto it = m_syncPeers.constFind(s);
+    if (it == m_syncPeers.constEnd())
+        return;
+    for (int peer : it.value()) {
+        if (!sessions[peer].fixed && placements[peer].slot < 0)
+            apply(peer, slot, half);
+    }
+}
+
+// 撤销：把 s 连同「与它同节落位的同组会话」一起撤掉
+void Problem::removeWithSync(int s)
+{
+    const Placement cur = placements[s];
+    const auto it = m_syncPeers.constFind(s);
+    if (it != m_syncPeers.constEnd()) {
+        for (int peer : it.value()) {
+            if (sessions[peer].fixed)
+                continue;
+            if (cur.slot >= 0 && placements[peer].slot == cur.slot
+                && placements[peer].half == cur.half)
+                remove(peer);
+        }
+    }
+    remove(s);
+}
+
+int Problem::hardAtNoSync(int s, int slot, int half) const
 {
     if (slot < 0 || slot >= slotCount())
         return kIllegal;
@@ -405,6 +496,19 @@ int Problem::hardViolations() const
     for (int s = 0; s < sessions.size(); ++s)
         if (!isPlaced(s))
             v++;
+    // 同时段组落位不一致（例如同组两条固定预排被钉在不同节）
+    for (auto it = m_syncPeers.constBegin(); it != m_syncPeers.constEnd(); ++it) {
+        const Placement &a = placements[it.key()];
+        if (a.slot < 0)
+            continue;
+        for (int peer : it.value()) {
+            const Placement &b = placements[peer];
+            if (b.slot < 0)
+                continue;
+            if (b.slot != a.slot || b.half != a.half)
+                ++v;
+        }
+    }
     return v;
 }
 
@@ -849,7 +953,7 @@ void Solver::placeFixed()
 {
     for (int s = 0; s < m_p.sessions.size(); ++s) {
         if (m_p.sessions[s].fixed)
-            m_p.apply(s, m_p.sessions[s].fixedSlot, m_p.sessions[s].fixedHalf);
+            m_p.placeWithSync(s, m_p.sessions[s].fixedSlot, m_p.sessions[s].fixedHalf);
     }
 }
 
@@ -898,7 +1002,7 @@ void Solver::greedy()
         if (bestIdx < 0)
             continue; // 全部位置非法（如连课塞不进），记未排
         if (bestHard == 0 || m_opt.placeAll)
-            m_p.apply(s, cands[bestIdx].slot, cands[bestIdx].half);
+            m_p.placeWithSync(s, cands[bestIdx].slot, cands[bestIdx].half);
         // placeAll=false 且无可行位置 → 保持未排
     }
 }
@@ -950,7 +1054,7 @@ void Solver::minConflicts()
         // 评估所有候选位置，选代价最小者（平手随机，保持多样性）
         const Placement cur = m_p.placements[s];
         const double softBefore = m_p.localSoft(s); // s 在当前位置的软罚分
-        m_p.remove(s);
+        m_p.removeWithSync(s);
         const QVector<Placement> cands = m_p.candidatePositions(s);
         Placement best = cur;
         double bestKey = 1e300;
@@ -972,7 +1076,7 @@ void Solver::minConflicts()
                     best = cand; // reservoir 抽样保证平手等概率
             }
         }
-        m_p.apply(s, best.slot, best.half);
+        m_p.placeWithSync(s, best.slot, best.half);
 
         // 软罚分增量更新（只动了 s，聚合键之外的项不变）；硬违例全量重算（开销小且精确）
         m_curSoft += m_p.localSoft(s) - softBefore;
@@ -1020,8 +1124,10 @@ void Solver::run()
     for (int s = 0; s < m_p.sessions.size(); ++s)
         m_p.remove(s);
     for (int s = 0; s < m_p.sessions.size(); ++s) {
+        if (m_p.placements[s].slot >= 0)
+            continue; // 已随同时段组落位
         if (s < m_bestPlacements.size() && m_bestPlacements[s].slot >= 0)
-            m_p.apply(s, m_bestPlacements[s].slot, m_bestPlacements[s].half);
+            m_p.placeWithSync(s, m_bestPlacements[s].slot, m_bestPlacements[s].half);
     }
 }
 

@@ -1091,6 +1091,94 @@ Item {
                             }
                         }
                     }
+
+                    // ---- 同时段组（走班）：不同课程但必须同节上课 ----
+                    AppCard {
+                        Layout.preferredWidth: 420
+                        Layout.fillHeight: true
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: Theme.spacingL
+                            spacing: Theme.spacingS
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Text {
+                                    text: qsTr("同时段组（走班）")
+                                    font.pixelSize: Theme.fontSubtitle
+                                    font.bold: true
+                                    color: Theme.text
+                                }
+                                Item { Layout.fillWidth: true }
+                                Text {
+                                    text: qsTr("可直接让 AI 助手建：“把16班生物、14班政治、1班地理排在同一节”")
+                                    color: Theme.textDisabled
+                                    font.pixelSize: Theme.fontCaption
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: qsTr("组内「班级-课程」的第 k 次课必须排在同一节（不同课程也可以），用于跨班走班。")
+                                color: Theme.textSecondary
+                                font.pixelSize: Theme.fontCaption
+                                wrapMode: Text.WordWrap
+                            }
+                            ListView {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                model: { root.rev; return app.timeSyncGroups() }
+                                spacing: 4
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    width: ListView.view.width
+                                    height: syncCol.implicitHeight + Theme.spacingS * 2
+                                    radius: Theme.radiusS
+                                    color: Theme.surfaceAlt
+                                    ColumnLayout {
+                                        id: syncCol
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.margins: Theme.spacingS
+                                        spacing: 2
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Text {
+                                                Layout.fillWidth: true
+                                                text: modelData.name
+                                                color: Theme.text
+                                                font.pixelSize: Theme.fontBody
+                                                font.bold: true
+                                            }
+                                            AppButton {
+                                                variant: "subtle"
+                                                text: qsTr("删除")
+                                                onClicked: app.removeTimeSyncGroup(modelData.id)
+                                            }
+                                        }
+                                        Repeater {
+                                            model: modelData.entries
+                                            delegate: Text {
+                                                required property var modelData
+                                                Layout.fillWidth: true
+                                                text: "· " + modelData.className + " 的 " + modelData.courseName
+                                                color: Theme.textSecondary
+                                                font.pixelSize: Theme.fontCaption
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                visible: app.timeSyncGroups().length === 0
+                                text: qsTr("还没有同时段组。走班场景可以让 AI 助手一次建好。")
+                                color: Theme.textDisabled
+                                font.pixelSize: Theme.fontCaption
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
                 }
             }
         }

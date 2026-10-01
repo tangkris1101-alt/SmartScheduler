@@ -16,6 +16,7 @@ add_library(sched_core STATIC
     model/School.h
     model/Teacher.h
     model/TimeConfig.h
+    model/TimeSyncGroup.h
 )
 
 target_include_directories(sched_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -22,6 +22,7 @@ private Q_SLOTS:
     void unplacedDetails();
     void preassignHalfSharesSlot();
     void planTimePreferenceScoring();
+    void timeSyncGroupSameSlot();
 };
 
 // 测试校例的实体 id 记录
@@ -486,6 +487,54 @@ void TestEngine::preassignHalfSharesSlot()
     const Schedule sch = spy.at(0).at(0).value<Schedule>();
     QCOMPARE(sch.courseAt(class1, 1, 1).value_or(-1), courseA); // 单周 = A
     QCOMPARE(sch.courseAt(class1, 1, 2).value_or(-1), courseB); // 双周 = B
+}
+
+// 同时段组（走班）：不同课程的两个班必须排在同一节
+void TestEngine::timeSyncGroupSameSlot()
+{
+    School school;
+    school.timeConfig.daysPerWeek = 2;
+    school.timeConfig.periodsPerDay = 3;
+    school.timeConfig.morningPeriods = 2;
+    ClassInfo c1; c1.name = QStringLiteral("16班");
+    ClassInfo c2; c2.name = QStringLiteral("14班");
+    const qint64 class1 = school.addClass(c1);
+    const qint64 class2 = school.addClass(c2);
+    Course sw; sw.name = QStringLiteral("生物");
+    Course zz; zz.name = QStringLiteral("政治");
+    const qint64 shengwu = school.addCourse(sw);
+    const qint64 zhengzhi = school.addCourse(zz);
+    PlanEntry e1; e1.classId = class1; e1.courseId = shengwu; e1.weeklyPeriods = 1;
+    PlanEntry e2; e2.classId = class2; e2.courseId = zhengzhi; e2.weeklyPeriods = 1;
+    school.addPlanEntry(e1);
+    school.addPlanEntry(e2);
+
+    TimeSyncGroup g;
+    g.name = QStringLiteral("高三走班");
+    g.entries = {{class1, shengwu}, {class2, zhengzhi}};
+    school.addTimeSyncGroup(g);
+
+    EngineOptions opt;
+    opt.runs = 1;
+    opt.maxIterationsPerRun = 200;
+    opt.seed = 11;
+    School copy = school;
+    SchedulerEngine engine(copy, opt);
+    QSignalSpy spy(&engine, &SchedulerEngine::finished);
+    engine.start();
+    QVERIFY2(spy.wait(15000), "引擎未完成");
+    const QualityReport report = spy.at(0).at(1).value<QualityReport>();
+    QCOMPARE(report.hardViolations, 0);
+    const Schedule sch = spy.at(0).at(0).value<Schedule>();
+    int slot1 = -1, slot2 = -1;
+    for (const auto &a : sch.assignments) {
+        if (a.classId == class1)
+            slot1 = a.slotIndex;
+        if (a.classId == class2)
+            slot2 = a.slotIndex;
+    }
+    QVERIFY(slot1 >= 0 && slot2 >= 0);
+    QCOMPARE(slot1, slot2); // 走班：同一节
 }
 
 // 计划条目的时段要求（软）：morningPeriods 与 earlyPeriods 都应出现在软分项里

@@ -11,7 +11,7 @@ namespace sched {
 
 namespace {
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 // 具名名单公共列（id,name,long_name,short_name,code,priority,remark）的读写辅助
 
 // null QString 会被绑定为 SQL NULL，违反 NOT NULL；统一转为空串
@@ -115,6 +115,19 @@ bool ProjectStore::open(const QString &path)
 // 旧工程升级：按版本逐级补列/改数据
 bool ProjectStore::migrate(int fromVersion)
 {
+    if (fromVersion < 4) {
+        // 同时段组（走班）：两张新表
+        const char *ddl4[] = {
+            "CREATE TABLE IF NOT EXISTS time_sync_groups("
+            " id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '')",
+            "CREATE TABLE IF NOT EXISTS time_sync_group_members("
+            " group_id INTEGER NOT NULL REFERENCES time_sync_groups(id) ON DELETE CASCADE,"
+            " class_id INTEGER NOT NULL, course_id INTEGER NOT NULL)"};
+        for (const char *sql : ddl4) {
+            if (!exec(QString::fromLatin1(sql)))
+                return false;
+        }
+    }
     if (fromVersion < 3) {
         // 预排的单双周（共用格）+ 计划的「前 N 节」软约束
         const char *alters3[] = {
@@ -198,6 +211,11 @@ bool ProjectStore::createSchema()
         " teacher_id INTEGER NOT NULL, PRIMARY KEY(entry_id, teacher_id))",
         "CREATE TABLE combined_groups("
         " id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '')",
+        "CREATE TABLE time_sync_groups("
+        " id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '')",
+        "CREATE TABLE time_sync_group_members("
+        " group_id INTEGER NOT NULL REFERENCES time_sync_groups(id) ON DELETE CASCADE,"
+        " class_id INTEGER NOT NULL, course_id INTEGER NOT NULL)",
         "CREATE TABLE combined_group_members("
         " group_id INTEGER NOT NULL REFERENCES combined_groups(id) ON DELETE CASCADE,"
         " class_id INTEGER NOT NULL, course_id INTEGER NOT NULL)",
@@ -235,7 +253,7 @@ bool ProjectStore::save(const School &school)
     // 1. 清表：子表在前，避免违反外键
     const char *clearOrder[] = {
         "schedule_assignments", "teacher_activities", "preassign", "no_schedule",
-        "combined_group_members", "combined_groups", "plan_entry_teachers", "plan_entries",
+        "time_sync_group_members", "time_sync_groups", "combined_group_members", "combined_groups", "plan_entry_teachers", "plan_entries",
         "group_members", "entity_groups", "classrooms", "teachers", "courses", "classes",
     };
     for (const char *t : clearOrder) {
@@ -377,6 +395,35 @@ bool ProjectStore::save(const School &school)
             for (qint64 memberId : g.memberIds) {
                 qm.addBindValue(g.id);
                 qm.addBindValue(memberId);
+                if (!qm.exec()) {
+                    rollback();
+                    return fail(qm.lastError().text());
+                }
+            }
+        }
+    }
+
+    // time_sync_groups + time_sync_group_members（同时段组）
+    {
+        QSqlQuery qg(m_db);
+        QSqlQuery qm(m_db);
+        if (!qg.prepare(QStringLiteral("INSERT INTO time_sync_groups(id,name) VALUES(?,?)"))
+            || !qm.prepare(QStringLiteral(
+                   "INSERT INTO time_sync_group_members(group_id,class_id,course_id) VALUES(?,?,?)"))) {
+            rollback();
+            return fail(qg.lastError().text() + qm.lastError().text());
+        }
+        for (const auto &g : school.timeSyncGroups) {
+            qg.addBindValue(g.id);
+            qg.addBindValue(textValue(g.name));
+            if (!qg.exec()) {
+                rollback();
+                return fail(qg.lastError().text());
+            }
+            for (const auto &e : g.entries) {
+                qm.addBindValue(g.id);
+                qm.addBindValue(e.first);
+                qm.addBindValue(e.second);
                 if (!qm.exec()) {
                     rollback();
                     return fail(qm.lastError().text());
@@ -717,6 +764,27 @@ bool ProjectStore::load(School *school)
             return fail(qm.lastError().text());
         while (qm.next()) {
             if (CombinedGroup *g = school->findCombinedGroup(qm.value(0).toLongLong()))
+                g->entries.append({qm.value(1).toLongLong(), qm.value(2).toLongLong()});
+        }
+    }
+
+    // time_sync_groups（同时段组）
+    {
+        QSqlQuery qg(m_db);
+        if (!qg.exec(QStringLiteral("SELECT id,name FROM time_sync_groups ORDER BY id")))
+            return fail(qg.lastError().text());
+        while (qg.next()) {
+            TimeSyncGroup g;
+            g.id = qg.value(0).toLongLong();
+            g.name = qg.value(1).toString();
+            school->timeSyncGroups.append(g);
+        }
+        QSqlQuery qm(m_db);
+        if (!qm.exec(QStringLiteral(
+                "SELECT group_id,class_id,course_id FROM time_sync_group_members ORDER BY group_id,rowid")))
+            return fail(qm.lastError().text());
+        while (qm.next()) {
+            if (TimeSyncGroup *g = school->findTimeSyncGroup(qm.value(0).toLongLong()))
                 g->entries.append({qm.value(1).toLongLong(), qm.value(2).toLongLong()});
         }
     }

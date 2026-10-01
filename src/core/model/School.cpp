@@ -62,6 +62,7 @@ Classroom *School::findClassroom(qint64 id) { return findById(classrooms, id); }
 Group *School::findGroup(qint64 id) { return findById(groups, id); }
 PlanEntry *School::findPlanEntry(qint64 id) { return findById(planEntries, id); }
 CombinedGroup *School::findCombinedGroup(qint64 id) { return findById(combinedGroups, id); }
+TimeSyncGroup *School::findTimeSyncGroup(qint64 id) { return findById(timeSyncGroups, id); }
 
 const ClassInfo *School::findClass(qint64 id) const { return findByIdConst(classes, id); }
 const Course *School::findCourse(qint64 id) const { return findByIdConst(courses, id); }
@@ -70,6 +71,7 @@ const Classroom *School::findClassroom(qint64 id) const { return findByIdConst(c
 const Group *School::findGroup(qint64 id) const { return findByIdConst(groups, id); }
 const PlanEntry *School::findPlanEntry(qint64 id) const { return findByIdConst(planEntries, id); }
 const CombinedGroup *School::findCombinedGroup(qint64 id) const { return findByIdConst(combinedGroups, id); }
+const TimeSyncGroup *School::findTimeSyncGroup(qint64 id) const { return findByIdConst(timeSyncGroups, id); }
 
 // ---- 新增 ----
 
@@ -129,6 +131,14 @@ qint64 School::addCombinedGroup(CombinedGroup g)
     return g.id;
 }
 
+qint64 School::addTimeSyncGroup(TimeSyncGroup g)
+{
+    if (g.id < 0)
+        g.id = allocateId(timeSyncGroups);
+    timeSyncGroups.append(g);
+    return g.id;
+}
+
 qint64 School::addNoScheduleConstraint(NoScheduleConstraint c)
 {
     if (c.id < 0)
@@ -169,6 +179,10 @@ bool School::removeClass(qint64 id)
     for (auto &g : combinedGroups)
         eraseIf(g.entries, [&](const QPair<qint64, qint64> &e) { return e.first == id; });
     eraseIf(combinedGroups, [](const CombinedGroup &g) { return g.entries.isEmpty(); });
+    // 同时段组同理
+    for (auto &g : timeSyncGroups)
+        eraseIf(g.entries, [&](const QPair<qint64, qint64> &e) { return e.first == id; });
+    eraseIf(timeSyncGroups, [](const TimeSyncGroup &g) { return g.entries.isEmpty(); });
     // 年级名单成员中移除
     for (auto &g : groups) {
         if (g.type == Group::Type::Grade)
@@ -195,6 +209,9 @@ bool School::removeCourse(qint64 id)
     for (auto &g : combinedGroups)
         eraseIf(g.entries, [&](const QPair<qint64, qint64> &e) { return e.second == id; });
     eraseIf(combinedGroups, [](const CombinedGroup &g) { return g.entries.isEmpty(); });
+    for (auto &g : timeSyncGroups)
+        eraseIf(g.entries, [&](const QPair<qint64, qint64> &e) { return e.second == id; });
+    eraseIf(timeSyncGroups, [](const TimeSyncGroup &g) { return g.entries.isEmpty(); });
     for (auto &g : groups) {
         if (g.type == Group::Type::CourseGroup)
             g.memberIds.removeAll(id);
@@ -256,6 +273,7 @@ bool School::removeGroup(qint64 id)
 
 bool School::removePlanEntry(qint64 id) { return eraseById(planEntries, id); }
 bool School::removeCombinedGroup(qint64 id) { return eraseById(combinedGroups, id); }
+bool School::removeTimeSyncGroup(qint64 id) { return eraseById(timeSyncGroups, id); }
 bool School::removeNoScheduleConstraint(qint64 id) { return eraseById(noScheduleConstraints, id); }
 bool School::removePreAssignment(qint64 id) { return eraseById(preAssignments, id); }
 bool School::removeTeacherActivity(qint64 id) { return eraseById(teacherActivities, id); }

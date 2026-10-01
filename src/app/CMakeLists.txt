@@ -2,6 +2,7 @@
 add_library(sched_app STATIC
     AdjustController.cpp
     AiController.cpp
+    AiToolsExtra.cpp
     AiController.h
     AdjustController.h
     AppController.cpp

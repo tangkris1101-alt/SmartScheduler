@@ -10,6 +10,7 @@
 #include "Schedule.h"
 #include "Teacher.h"
 #include "TimeConfig.h"
+#include "TimeSyncGroup.h"
 
 #include <QString>
 #include <QVector>
@@ -30,6 +31,7 @@ public:
     QVector<Group> groups;
     QVector<PlanEntry> planEntries;
     QVector<CombinedGroup> combinedGroups;
+    QVector<TimeSyncGroup> timeSyncGroups; // 同时段组（走班）
     QVector<NoScheduleConstraint> noScheduleConstraints;
     QVector<PreAssignment> preAssignments;
     QVector<TeacherActivity> teacherActivities;
@@ -43,6 +45,7 @@ public:
     Group *findGroup(qint64 id);
     PlanEntry *findPlanEntry(qint64 id);
     CombinedGroup *findCombinedGroup(qint64 id);
+    TimeSyncGroup *findTimeSyncGroup(qint64 id);
     const ClassInfo *findClass(qint64 id) const;
     const Course *findCourse(qint64 id) const;
     const Teacher *findTeacher(qint64 id) const;
@@ -50,6 +53,7 @@ public:
     const Group *findGroup(qint64 id) const;
     const PlanEntry *findPlanEntry(qint64 id) const;
     const CombinedGroup *findCombinedGroup(qint64 id) const;
+    const TimeSyncGroup *findTimeSyncGroup(qint64 id) const;
 
     // ---- 名单新增（id 为 -1 时自动分配，返回最终 id）----
     qint64 addClass(ClassInfo c);
@@ -59,6 +63,7 @@ public:
     qint64 addGroup(Group g);
     qint64 addPlanEntry(PlanEntry e);
     qint64 addCombinedGroup(CombinedGroup g);
+    qint64 addTimeSyncGroup(TimeSyncGroup g);
     qint64 addNoScheduleConstraint(NoScheduleConstraint c);
     qint64 addPreAssignment(PreAssignment p);
     qint64 addTeacherActivity(TeacherActivity a);
@@ -71,6 +76,7 @@ public:
     bool removeGroup(qint64 id);
     bool removePlanEntry(qint64 id);
     bool removeCombinedGroup(qint64 id);
+    bool removeTimeSyncGroup(qint64 id);
     bool removeNoScheduleConstraint(qint64 id);
     bool removePreAssignment(qint64 id);
     bool removeTeacherActivity(qint64 id);

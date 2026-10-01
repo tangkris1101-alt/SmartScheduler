@@ -43,6 +43,8 @@ private Q_SLOTS:
     void batchClassesWithAutoGroup();
     void batchOps();
     void aiToolLayer();
+    void aiToolsExtended();
+    void aiTimeSyncTools();
     void schedulerBridge();
     void adjustRulesMatrix();
     void adjustUndoRedo();
@@ -947,6 +949,181 @@ void TestApp::aiToolLayer()
     const QVariantMap clash = app.aiDescribe(QStringLiteral("move_cell"), moveArgs);
     QCOMPARE(clash.value(QStringLiteral("ok")).toBool(), false);
     QVERIFY(!clash.value(QStringLiteral("error")).toString().isEmpty());
+}
+
+
+void TestApp::aiToolsExtended()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    sched::Course zixi;
+    zixi.name = QStringLiteral("自习");
+    const qint64 course = app.school()->addCourse(zixi);
+    for (qint64 cid : {ids.class1, ids.class2}) {
+        sched::PlanEntry e;
+        e.classId = cid;
+        e.courseId = course;
+        e.weeklyPeriods = 6;
+        e.teacherIds = {ids.tZhang};
+        app.school()->addPlanEntry(e);
+    }
+    sched::Group tg;
+    tg.type = sched::Group::Type::TeacherGroup;
+    tg.name = QStringLiteral("数学组");
+    const qint64 gid = app.school()->addGroup(tg);
+    app.school()->findGroup(gid)->memberIds = {ids.tZhang, ids.tWang};
+
+    const auto apply1 = [&](const QString &tool, const QVariantMap &args) {
+        const QVariantMap dry = app.aiDescribe(tool, args);
+        if (!dry.value(QStringLiteral("ok")).toBool())
+            return QVariantMap{{QStringLiteral("dryError"), dry.value(QStringLiteral("error"))}};
+        return app.applyAiOperations(
+            {QVariantMap{{QStringLiteral("tool"), tool}, {QStringLiteral("args"), args}}});
+    };
+
+    // 1) 连堂：2 班每周 2 次 × 每次 2 节（自习在计划里）
+    const QVariantMap chained2 = apply1(
+        QStringLiteral("set_plan_chained"),
+        {{QStringLiteral("courseName"), QStringLiteral("自习")},
+         {QStringLiteral("classNames"), QVariantList{QStringLiteral("1班"), QStringLiteral("2班")}},
+         {QStringLiteral("times"), 2},
+         {QStringLiteral("length"), 2}});
+    QCOMPARE(chained2.value(QStringLiteral("changed")).toBool(), true);
+    for (const auto &e : app.school()->planEntries) {
+        if (e.courseId == course) {
+            QCOMPARE(e.chainedCount, 2);
+            QCOMPARE(e.chainLength, 2);
+        }
+    }
+    QVERIFY(app.undoLastBatch());
+    for (const auto &e : app.school()->planEntries) {
+        if (e.courseId == course)
+            QCOMPARE(e.chainedCount, 0);
+    }
+
+    // 2) 前 N 节
+    const QVariantMap early = apply1(
+        QStringLiteral("set_plan_early_periods"),
+        {{QStringLiteral("courseName"), QStringLiteral("自习")},
+         {QStringLiteral("classNames"), QVariantList{QStringLiteral("1班"), QStringLiteral("2班")}},
+         {QStringLiteral("earlyPeriods"), 3}});
+    QCOMPARE(early.value(QStringLiteral("changed")).toBool(), true);
+    for (const auto &e : app.school()->planEntries) {
+        if (e.courseId == course)
+            QCOMPARE(e.earlyPeriods, 3);
+    }
+
+    // 3) 任课老师按班轮流：1班→张，2班→王
+    const QVariantMap teachers = apply1(
+        QStringLiteral("set_plan_teachers"),
+        {{QStringLiteral("courseName"), QStringLiteral("自习")},
+         {QStringLiteral("classNames"), QVariantList{QStringLiteral("1班"), QStringLiteral("2班")}},
+         {QStringLiteral("teacherNames"), QVariantList{QStringLiteral("张"), QStringLiteral("王")}},
+         {QStringLiteral("rotate"), true}});
+    QCOMPARE(teachers.value(QStringLiteral("changed")).toBool(), true);
+    for (const auto &e : app.school()->planEntries) {
+        if (e.courseId != course)
+            continue;
+        const qint64 expect = e.classId == ids.class1 ? ids.tZhang : ids.tWang;
+        QCOMPARE(e.teacherIds.size(), 1);
+        QCOMPARE(e.teacherIds.first(), expect);
+    }
+
+    // 4) 老师日最多课（软约束字段）
+    const QVariantMap daily = apply1(
+        QStringLiteral("set_teacher_daily_max"),
+        {{QStringLiteral("teacherNames"), QVariantList{QStringLiteral("张")}},
+         {QStringLiteral("maxPerDay"), 4}});
+    QCOMPARE(daily.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->findTeacher(ids.tZhang)->maxPeriodsPerDay, 4);
+
+    // 5) 按组批量不排（教研组的老师 × 周一第1、2节）
+    const QVariantMap byGroup = apply1(
+        QStringLiteral("batch_no_schedule_by_group"),
+        {{QStringLiteral("groupName"), QStringLiteral("数学组")},
+         {QStringLiteral("days"), QVariantList{1}},
+         {QStringLiteral("periods"), QVariantList{1, 2}}});
+    QCOMPARE(byGroup.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.noScheduleSlots(2, ids.tZhang).size(), 2);
+    QCOMPARE(app.noScheduleSlots(2, ids.tWang).size(), 2);
+
+    // 6) 只读：老师课表
+    app.school()->schedule.setAssignment(ids.class1, 0, 0, course);
+    const QVariantMap ts = app.aiRunReadTool(
+        QStringLiteral("query_teacher_schedule"), {{QStringLiteral("teacherName"), QStringLiteral("张")}});
+    QCOMPARE(ts.value(QStringLiteral("ok")).toBool(), true);
+    QVERIFY(ts.value(QStringLiteral("data")).toMap().value(QStringLiteral("任课")).toList().size() >= 1);
+
+    // 7) 撤销这一串（单级：回到本用例最开始的状态）
+    QVERIFY(app.undoLastBatch());
+}
+
+void TestApp::aiTimeSyncTools()
+{
+    AppController app;
+    const MiniSchool ids = makeMini(app);
+    for (qint64 cid : {ids.class1, ids.class2}) {
+        sched::PlanEntry e;
+        e.classId = cid;
+        e.courseId = ids.yuwen;
+        e.weeklyPeriods = 1;
+        app.school()->addPlanEntry(e);
+    }
+    sched::Course sx;
+    sx.name = QStringLiteral("数学");
+    const qint64 math = app.school()->addCourse(sx);
+    sched::PlanEntry e2;
+    e2.classId = ids.class2;
+    e2.courseId = math;
+    e2.weeklyPeriods = 1;
+    app.school()->addPlanEntry(e2);
+
+    // 干跑：建同组前必须至少两个有效成员
+    const QVariantMap bad = app.aiDescribe(
+        QStringLiteral("create_time_sync_group"),
+        {{QStringLiteral("name"), QStringLiteral("走班1")},
+         {QStringLiteral("entries"), QVariantList{QVariantMap{{QStringLiteral("className"), QStringLiteral("1班")},
+                                                              {QStringLiteral("courseName"), QStringLiteral("语文")}}}}});
+    QCOMPARE(bad.value(QStringLiteral("ok")).toBool(), false);
+
+    // 正常建组：1班语文 = 2班数学 同节
+    const QVariantList entries{QVariantMap{{QStringLiteral("className"), QStringLiteral("1班")},
+                                           {QStringLiteral("courseName"), QStringLiteral("语文")}},
+                               QVariantMap{{QStringLiteral("className"), QStringLiteral("2班")},
+                                           {QStringLiteral("courseName"), QStringLiteral("数学")}}};
+    const QVariantMap dry = app.aiDescribe(
+        QStringLiteral("create_time_sync_group"),
+        {{QStringLiteral("name"), QStringLiteral("走班1")}, {QStringLiteral("entries"), entries}});
+    QCOMPARE(dry.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(dry.value(QStringLiteral("changes")).toInt(), 2);
+
+    const QVariantMap applied = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("create_time_sync_group")},
+                     {QStringLiteral("args"),
+                      QVariantMap{{QStringLiteral("name"), QStringLiteral("走班1")},
+                                  {QStringLiteral("entries"), entries}}}}});
+    QCOMPARE(applied.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->timeSyncGroups.size(), 1);
+    QCOMPARE(app.school()->timeSyncGroups.first().entries.size(), 2);
+
+    // 只读：列同时段组
+    const QVariantMap listed = app.aiRunReadTool(QStringLiteral("list_time_sync_groups"), {});
+    QCOMPARE(listed.value(QStringLiteral("ok")).toBool(), true);
+    QCOMPARE(listed.value(QStringLiteral("data")).toList().size(), 1);
+
+    // 撤销 → 回到没有组的状态
+    QVERIFY(app.undoLastBatch());
+    QCOMPARE(app.school()->timeSyncGroups.size(), 0);
+
+    // 删除工具：先建后删
+    app.createTimeSyncGroup(QStringLiteral("走班2"), entries);
+    QCOMPARE(app.school()->timeSyncGroups.size(), 1);
+    const QVariantMap removed = app.applyAiOperations(
+        {QVariantMap{{QStringLiteral("tool"), QStringLiteral("remove_time_sync_group")},
+                     {QStringLiteral("args"),
+                      QVariantMap{{QStringLiteral("name"), QStringLiteral("走班2")}}}}});
+    QCOMPARE(removed.value(QStringLiteral("changed")).toBool(), true);
+    QCOMPARE(app.school()->timeSyncGroups.size(), 0);
 }
 
 void TestApp::schedulerBridge()
