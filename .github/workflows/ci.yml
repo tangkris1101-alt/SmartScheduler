@@ -35,8 +35,10 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
+      # -V：tst_app 出过一次「失败但零输出」的崩溃，只有全量日志才留得下线索
+      # --repeat until-pass:2：tst_app 含多线程排课，CI 上偶发；重试一次以区分偶发与真实缺陷
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build -V --repeat until-pass:2
 
       - name: Deploy (windeployqt)
         if: github.ref == 'refs/heads/main'
