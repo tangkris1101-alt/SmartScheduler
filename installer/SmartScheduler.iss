@@ -5,10 +5,13 @@
 #define MyAppNameEn "SmartScheduler"
 ; 版本号可被命令行覆盖：iscc /DMyAppVersion=1.0.2 ...
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.41"
+  #define MyAppVersion "1.0.42"
 #endif
 #define MyAppPublisher "SmartScheduler"
 #define MyAppExeName "SmartScheduler.exe"
+; 应用标识（AUMID）：应用内弹 Windows 通知时用它归属到本应用，必须与
+; src/app/AppController.cpp 里的 kToastAumid 保持一致
+#define MyAppAumid "SmartScheduler"
 
 [Setup]
 AppId={{8F3A2C1E-5B7D-4E9F-A1C2-3D4E5F6A7B8C}
@@ -42,9 +45,10 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "..\deploy\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+; AppUserModelID：让「更新已就绪」等系统通知归属到本应用（未注册的 AUMID 通知可能不显示）
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppAumid}"
 Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; AppUserModelID: "{#MyAppAumid}"
 
 [Run]
 ; postinstall 在静默模式下也会执行（除非 skipifsilent）——一键更新走 /VERYSILENT，

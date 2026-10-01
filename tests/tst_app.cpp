@@ -1839,6 +1839,17 @@ void TestApp::versionAndUpdate()
     QVERIFY(!bat.contains(QStringLiteral("\\\"")));
     // 安装完删掉安装包自身，别在 %TEMP% 里越堆越多
     QVERIFY(bat.contains(QStringLiteral("del /f /q \"C:\\临时 目录\\SmartScheduler-setup.exe\"")));
+
+    // 系统提醒脚本：整段作为单个 -Command 参数传给 powershell，出现双引号会被转义坏掉；
+    // 中文标题/正文经环境变量带入（SS_TOAST_*），AUMID 与安装包 [Icons] 注册的一致
+    const QString toast = AppController::toastScript();
+    QVERIFY(toast.contains(QStringLiteral("Windows.UI.Notifications.ToastNotificationManager")));
+    QVERIFY(toast.contains(QStringLiteral("ToastTemplateType]::ToastText02")));
+    QVERIFY(toast.contains(QStringLiteral("$env:SS_TOAST_TITLE")));
+    QVERIFY(toast.contains(QStringLiteral("$env:SS_TOAST_BODY")));
+    QVERIFY(toast.contains(QStringLiteral("$env:SS_TOAST_AUMID")));
+    QVERIFY(!toast.contains(QLatin1Char('"')));
+    QVERIFY(app.notifiedVersion().isEmpty()); // 还没下载过任何版本，不应弹过提醒
 }
 
 void TestApp::logExport()

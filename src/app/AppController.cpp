@@ -2809,6 +2809,80 @@ bool AppController::updateProbeConclusive(const QString &tag, const QString &cur
     return freshChannel || compareVersions(tag, current) > 0;
 }
 
+// ---- 系统提醒（Windows 原生通知）----
+
+// 走 WinRT 的 ToastNotificationManager：Windows 10/11 通知中心原生 toast。
+// 之所以让 PowerShell 代劳：C++/WinRT 在 MinGW 下不可用，手写 WinRT 的 COM vtable
+// 风险远高于收益。脚本里不要出现双引号（整段作为单个 -Command 参数传递，中文经环境变量带入）。
+QString AppController::toastScript()
+{
+    return QStringLiteral(
+        "[void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
+        "ContentType=WindowsRuntime];"
+        "[void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, "
+        "ContentType=WindowsRuntime];"
+        "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+        "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+        "$n=$t.GetElementsByTagName('text');"
+        "[void]$n.Item(0).AppendChild($t.CreateTextNode($env:SS_TOAST_TITLE));"
+        "[void]$n.Item(1).AppendChild($t.CreateTextNode($env:SS_TOAST_BODY));"
+        "$toast=[Windows.UI.Notifications.ToastNotification]::new($t);"
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+        "$env:SS_TOAST_AUMID).Show($toast)");
+}
+
+// AUMID 与安装包 [Icons] 里注册的一致，通知才会归到「智排课系统」名下
+static const char *kToastAumid = "SmartScheduler";
+
+bool AppController::showWindowsToast(const QString &title, const QString &body, bool wait)
+{
+#ifdef Q_OS_WIN
+    QProcess p;
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("SS_TOAST_TITLE"), title);
+    env.insert(QStringLiteral("SS_TOAST_BODY"), body);
+    env.insert(QStringLiteral("SS_TOAST_AUMID"), QString::fromLatin1(kToastAumid));
+    p.setProcessEnvironment(env);
+    p.setProgram(QStringLiteral("powershell.exe"));
+    // 注意：不要加 -WindowStyle Hidden —— 实测该参数会让 powershell 卡住不退出；
+    // 控制台窗口由下面的 CREATE_NO_WINDOW 消除
+    p.setArguments({QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+                    QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
+                    QStringLiteral("-Command"), toastScript()});
+    // 不弹控制台窗口：否则每次提醒都会闪一下黑框（CREATE_NO_WINDOW）
+    p.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) {
+        args->flags |= 0x08000000u;
+    });
+    if (!wait) {
+        if (!p.startDetached())
+            qWarning("系统提醒: 启动 powershell 失败（%s）", qPrintable(p.errorString()));
+        return true; // 分离模式无从得知结果，按「已发出」处理
+    }
+    p.start();
+    if (!p.waitForFinished(15000)) {
+        qWarning("系统提醒: powershell 超时未返回");
+        return false;
+    }
+    const bool ok = p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
+    if (!ok)
+        qWarning("系统提醒: powershell 退出码 %d，stderr=%s", p.exitCode(),
+                 qPrintable(QString::fromLocal8Bit(p.readAllStandardError()).trimmed()));
+    return ok;
+#else
+    Q_UNUSED(title);
+    Q_UNUSED(body);
+    Q_UNUSED(wait);
+    return false;
+#endif
+}
+
+void AppController::sendTestNotification()
+{
+    qInfo("系统提醒: 发送测试通知");
+    showWindowsToast(tr("智排课系统"),
+                     tr("这是一条测试提醒。更新下载完成后，会这样通知你点「安装更新」。"));
+}
+
 void AppController::checkUpdate()
 {
     checkUpdate(true); // 手动点击：显示「检查中」状态
@@ -3150,6 +3224,13 @@ void AppController::tryUpdateDownload()
         m_updateDlState = 2;
         m_updateDlMessage = tr("下载完成，校验通过。");
         Q_EMIT updateDlStateChanged();
+        // 系统提醒：切到「已就绪」时弹一次 Windows 通知，人不在窗口前也能知道（同一版本只弹一次）
+        if (m_notifiedVersion != m_latestVersion) {
+            m_notifiedVersion = m_latestVersion;
+            showWindowsToast(tr("智排课系统 · 更新已就绪"),
+                             tr("新版本 %1 已下载完成，点「安装更新」即可升级。")
+                                 .arg(m_latestVersion));
+        }
     });
 }
 

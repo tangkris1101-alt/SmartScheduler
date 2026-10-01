@@ -867,6 +867,19 @@ int main(int argc, char *argv[])
         timer->start(500);
     }
 
+    // 回归自检：--smoke=toast 同步发一条 Windows 提醒，验证 powershell → WinRT toast 链路
+    // （只验证「发出并被系统接收」，横幅是否显示取决于系统通知设置）
+    // 0 通过，26=发送失败
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("toast")) {
+        QTimer::singleShot(0, &app, [&app]() {
+            const bool ok = AppController::showWindowsToast(
+                QStringLiteral("智排课系统"),
+                QStringLiteral("测试提醒：更新就绪时会这样通知你"), true);
+            fprintf(stderr, "[smoke] smoke-toast: %s\n", ok ? "ok" : "failed");
+            app.exit(ok ? 0 : 26);
+        });
+    }
+
     // 回归自检：--smoke=download 真实走「检查更新 → 镜像链下载安装包 → 已就绪后点检查」全流程。
     // 版本相等也照下（只验证下载链路本身），文件落在 %TEMP%/SmartScheduler-update。
     // 0 通过，21=检查更新失败，22=下载失败，23=超时，24=落盘文件异常，
@@ -922,11 +935,20 @@ int main(int argc, char *argv[])
             }
             timer->stop();
             const QString readyMsg = appController.updateMessage();
+            const bool notified = appController.notifiedVersion() == appController.latestVersion()
+                                  && !appController.latestVersion().isEmpty();
             if (appController.updateStatus() != 2 || readyMsg.isEmpty()
                 || !readyMsg.contains(appController.latestVersion())) {
                 qWarning("smoke-download: 已就绪状态下点检查无有效反馈 status=%d msg=%s",
                          appController.updateStatus(), qPrintable(readyMsg));
                 app.exit(25);
+                return;
+            }
+            if (!notified) {
+                qWarning("smoke-download: 下载就绪后没有发系统提醒（notified='%s' 最新版='%s'）",
+                         qPrintable(appController.notifiedVersion()),
+                         qPrintable(appController.latestVersion()));
+                app.exit(27);
                 return;
             }
             // ds == 2：验证落盘文件
@@ -935,8 +957,9 @@ int main(int argc, char *argv[])
             qint64 fs = 0;
             if (!exes.isEmpty())
                 fs = QFileInfo(d.filePath(exes.first())).size();
-            qWarning("smoke-download: 就绪，文件=%s 大小=%lld；点检查反馈=「%s」",
-                     qPrintable(exes.value(0)), (long long)fs, qPrintable(readyMsg));
+            qWarning("smoke-download: 就绪，文件=%s 大小=%lld；点检查反馈=「%s」；系统提醒=%s",
+                     qPrintable(exes.value(0)), (long long)fs, qPrintable(readyMsg),
+                     qPrintable(appController.notifiedVersion()));
             app.exit(!exes.isEmpty() && fs > 5 * 1024 * 1024 ? 0 : 24);
         });
         timer->start(1000);

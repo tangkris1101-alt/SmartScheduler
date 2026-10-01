@@ -239,11 +239,19 @@ public:
     bool updateReady() const { return m_updateDlState == 2; }
     int updateDlPercent() const { return m_updateDlPercent; }
     QString updateDlMessage() const { return m_updateDlMessage; }
+    // 已弹过系统提醒的版本（自检用：确认「下载就绪 → 弹提醒」这条链路真的走过）
+    QString notifiedVersion() const { return m_notifiedVersion; }
     QString logFilePath() const;
 
     // 版本号比较与「本次探测是否可信」的判定，抽成静态纯函数便于单测
     static int compareVersions(const QString &a, const QString &b);
     static bool updateProbeConclusive(const QString &tag, const QString &current, bool freshChannel);
+
+    // 系统提醒：更新下载就绪时弹 Windows 原生通知（WinRT toast）。
+    // toastScript() 单独暴露便于单测；wait=true 时同步等待（自检用）
+    static QString toastScript();
+    static bool showWindowsToast(const QString &title, const QString &body, bool wait = false);
+    Q_INVOKABLE void sendTestNotification(); // 设置页「发送测试提醒」：验证系统通知是否被允许
 
     Q_INVOKABLE void checkUpdate();
     void checkUpdateSilently(); // 定时/启动静默检查：不显示「检查中」，发现新版本自动下载
@@ -396,6 +404,7 @@ private:
     QVector<UpdateChannel> m_updateChannels; // 按国内可达性 + 实时性排序，逐个回退
     int m_updateAttempt = 0;
     bool m_freshChannelAnswered = false; // 本轮是否有实时通道给出了结论
+    QString m_notifiedVersion;           // 已弹过系统提醒的版本，避免同一版本反复打扰
     void tryUpdateSource();
     void finishUpdateProbe(); // 通道全部问完的收尾（兜底「已是最新」或报失败）
 

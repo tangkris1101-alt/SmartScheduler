@@ -136,6 +136,13 @@ Item {
                             onClicked: app.checkUpdate()
                         }
                         AppButton {
+                            text: qsTr("🔔 测试提醒")
+                            onClicked: {
+                                app.sendTestNotification()
+                                toastTestHint.visible = true
+                            }
+                        }
+                        AppButton {
                             visible: app.updateDlState === 2
                             variant: "primary"
                             text: qsTr("✔ 安装更新")
@@ -197,6 +204,15 @@ Item {
                         visible: app.updateDlState === 3
                         text: app.updateDlMessage
                         color: Theme.danger
+                        font.pixelSize: Theme.fontCaption
+                        wrapMode: Text.WordWrap
+                    }
+                    Text {
+                        id: toastTestHint
+                        Layout.fillWidth: true
+                        visible: false
+                        text: qsTr("已发出测试提醒。若桌面右下角没有弹出横幅，请到「Windows 设置 → 系统 → 通知和操作」确认通知已开启；提醒本身仍会留在通知中心。")
+                        color: Theme.textSecondary
                         font.pixelSize: Theme.fontCaption
                         wrapMode: Text.WordWrap
                     }
