@@ -46,9 +46,18 @@ jobs:
           copy build\SmartScheduler.exe deploy\
           windeployqt --release --compiler-runtime --qmldir src\ui deploy\SmartScheduler.exe
 
+      # 只上传单个 zip：deploy/ 有 1300+ 文件，目录直传会迅速耗尽 Actions 存储配额
+      - name: Package portable
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: Compress-Archive -Path deploy\* -DestinationPath "SmartScheduler-win64-$($env:GITHUB_SHA.Substring(0,7)).zip" -CompressionLevel Optimal
+
+      # 配额耗尽（每 6-12 小时才重算）不该让 CI 变红：正式产物由 tag 触发的 release.yml 产出
       - name: Upload artifact
         if: github.ref == 'refs/heads/main'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: SmartScheduler-windows
-          path: deploy/
+          path: SmartScheduler-win64-*.zip
+          retention-days: 3
