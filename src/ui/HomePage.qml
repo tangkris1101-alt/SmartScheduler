@@ -129,6 +129,16 @@ Flickable {
                     }
                 }
 
+                // 拖拽打开的提示（不占按钮位，做成一行业务说明）
+                Text {
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: 0
+                    text: qsTr("小技巧：把 .spk 工程文件直接拖进窗口就能打开，不用点「打开项目」。")
+                    color: Theme.textDisabled
+                    font.pixelSize: Theme.fontCaption
+                    wrapMode: Text.WordWrap
+                }
+
                 // 空项目快速上手引导
                 Rectangle {
                     Layout.topMargin: Theme.spacingM

@@ -170,6 +170,114 @@ ApplicationWindow {
         }
     }
 
+    // ---- 拖入 .spk 直接打开（从资源管理器把工程文件拖到窗口上）----
+    DropArea {
+        id: spkDrop
+        anchors.fill: parent
+        keys: ["text/uri-list"] // 资源管理器拖文件时就是这个 MIME
+        onEntered: function (drag) {
+            if (drag.hasUrls)
+                drag.accepted = true
+            dropHint.visible = true
+        }
+        onExited: dropHint.visible = false
+        onDropped: function (drop) {
+            dropHint.visible = false
+            win.handleDroppedUrls(drop.urls)
+        }
+    }
+
+    // 拖入的文件里挑第一个 .spk 打开；不是工程文件就提示一下
+    //（抽成函数：自检模式 --smoke=drop 可以直接调它，不必真的拖鼠标）
+    function handleDroppedUrls(urls) {
+        let path = ""
+        for (let i = 0; i < urls.length; ++i) {
+            const u = urls[i].toString()
+            if (u.toLowerCase().endsWith(".spk")) {
+                path = u
+                break
+            }
+        }
+        if (path === "") {
+            dropHint.errorMode = true
+            dropHint.visible = true
+            dropHintTimer.restart()
+            return false
+        }
+        win.openProjectGuarded(path)
+        return true
+    }
+
+    // 拖拽时的高亮提示（松开前一直显示）
+    Rectangle {
+        id: dropHint
+        property bool errorMode: false
+        anchors.fill: parent
+        anchors.margins: Theme.spacingM
+        visible: false
+        z: 900
+        radius: Theme.radiusL
+        color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.08)
+        border.width: 2
+        border.color: errorMode ? Theme.danger : Theme.primary
+        Text {
+            anchors.centerIn: parent
+            text: dropHint.errorMode ? qsTr("只能拖入 .spk 工程文件") : qsTr("松开即可打开该工程")
+            color: dropHint.errorMode ? Theme.danger : Theme.primary
+            font.pixelSize: Theme.fontSubtitle
+            font.bold: true
+        }
+        Timer {
+            id: dropHintTimer
+            interval: 1800
+            onTriggered: {
+                dropHint.visible = false
+                dropHint.errorMode = false
+            }
+        }
+    }
+
+    // 拖拽打开也要过一遍「未保存」守护，避免静默丢弃当前更改
+    //（首页的「打开项目」有自己的同款守护，两处入口各自独立，互不影响）
+    function openProjectGuarded(path) {
+        if (app.projectDirty) {
+            dropGuard.pendingPath = path
+            dropGuard.open()
+        } else if (app.openProject(path)) {
+            win.currentPage = 0 // 打开后回首页，直接看到班级/课程/计划概览
+        }
+    }
+
+    AppConfirmDialog {
+        id: dropGuard
+        parent: Overlay.overlay
+        property string pendingPath: ""
+        title: qsTr("未保存的更改")
+        message: qsTr("当前项目「%1」有未保存的更改，继续打开将丢弃这些更改。是否先保存？")
+            .arg(app.schoolName)
+        okText: qsTr("保存并继续")
+        thirdText: qsTr("不保存继续")
+        cancelText: qsTr("取消")
+        onAccepted: {
+            if (app.saveProject() && app.openProject(pendingPath))
+                win.currentPage = 0
+            else
+                dropSaveAs.open()
+        }
+        onThirdAction: if (app.openProject(pendingPath)) win.currentPage = 0
+    }
+
+    FileDialog {
+        id: dropSaveAs
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("SmartScheduler 项目 (*.spk)")]
+        onAccepted: {
+            if (app.saveProjectAs(selectedFile.toString())
+                    && app.openProject(dropGuard.pendingPath))
+                win.currentPage = 0
+        }
+    }
+
     // 首次启动显示新手引导；内测门禁锁着时先把门禁弹窗顶上来
     Component.onCompleted: {
         if (app.betaLocked)

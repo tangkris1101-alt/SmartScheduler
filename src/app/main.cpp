@@ -935,6 +935,80 @@ int main(int argc, char *argv[])
         timer->start(500);
     }
 
+    // 回归自检：--smoke=drop --project=<spk> 走 QML 的「拖入文件」处理函数（挑 .spk → 打开 → 回首页）
+    // 0 通过，61=没打开工程，62=没切回首页，63=传非 .spk 时也当成功
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("drop")) {
+        QString project;
+        for (const auto &a : args)
+            if (a.startsWith(QStringLiteral("--project=")))
+                project = a.mid(10);
+        auto *stage = new int(0);
+        auto *ticks = new int(0);
+        QTimer *timer = new QTimer(&app);
+        QObject::connect(timer, &QTimer::timeout, &app,
+                         [&appController, &app, &engine, stage, ticks, timer, project]() {
+            if (++(*ticks) > 40) {
+                timer->stop();
+                qWarning("smoke-drop: 超时 stage=%d", *stage);
+                app.exit(61);
+                return;
+            }
+            const auto roots = engine.rootObjects();
+            if (roots.isEmpty())
+                return;
+            QObject *win = roots.first();
+            if (*stage == 0) {
+                if (appController.hasProject())
+                    return; // 等启动流程结束（不打开任何工程）
+                QVariantList urls{QUrl::fromLocalFile(project)};
+                QVariant ret;
+                const bool called = QMetaObject::invokeMethod(
+                    win, "handleDroppedUrls", Q_RETURN_ARG(QVariant, ret), Q_ARG(QVariant, urls));
+                if (!called) {
+                    timer->stop();
+                    qWarning("smoke-drop: 找不到 handleDroppedUrls()");
+                    app.exit(61);
+                    return;
+                }
+                if (!ret.toBool()) {
+                    timer->stop();
+                    qWarning("smoke-drop: 拖入 .spk 竟被判为非法文件");
+                    app.exit(61);
+                    return;
+                }
+                *stage = 1;
+                return;
+            }
+            timer->stop();
+            const int page = win->property("currentPage").toInt();
+            if (!appController.hasProject()) {
+                qWarning("smoke-drop: 拖入后没有打开工程（%s）",
+                         qUtf8Printable(appController.lastError()));
+                app.exit(61);
+                return;
+            }
+            if (page != 0) {
+                qWarning("smoke-drop: 打开后没回首页（page=%d）", page);
+                app.exit(62);
+                return;
+            }
+            // 非 .spk 文件应被拒
+            QVariant urls2{QVariantList{QUrl::fromLocalFile(QStringLiteral("C:/Windows/notepad.exe"))}};
+            QVariant bad;
+            QMetaObject::invokeMethod(win, "handleDroppedUrls", Q_RETURN_ARG(QVariant, bad),
+                                      Q_ARG(QVariant, urls2));
+            if (bad.toBool()) {
+                qWarning("smoke-drop: 非 .spk 文件也被接受");
+                app.exit(63);
+                return;
+            }
+            qWarning("smoke-drop: 通过（%d 班 / %d 计划条目，已回首页）",
+                     appController.classCount(), appController.planEntryCount());
+            app.exit(0);
+        });
+        timer->start(250);
+    }
+
     // 离线验收：--smoke=solve --project=<spk> [--runs=8] 打开工程 → 自动排课 → 应用结果 → 原路径保存
     // 0 通过（硬违例 0 且全部排上），41=打不开，42=超时，43=有硬违例或没排满，44=保存失败
     if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("solve")) {
