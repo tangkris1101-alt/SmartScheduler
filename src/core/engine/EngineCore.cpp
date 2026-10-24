@@ -235,6 +235,38 @@ QVector<int> Problem::coveredSlots(int s, int startSlot) const
     return out;
 }
 
+// 从 placements 重建占用表：局部搜索里的增量加减一旦漂移，
+// 最终报告会出现「课表本身干净、引擎却说有违例」的幽灵数字
+void Problem::rebuildOccupancy()
+{
+    for (auto &v : m_classOcc)
+        for (auto &a : v)
+            a = {0, 0};
+    for (auto &v : m_teacherOcc)
+        for (auto &a : v)
+            a = {0, 0};
+    for (auto &v : m_roomOcc)
+        for (auto &a : v)
+            a = {0, 0};
+    for (auto &v : m_courseClsOcc)
+        for (auto &a : v)
+            a = {0, 0};
+    // 老师活动（班主任会/教研）本来就折在老师占用里，重建时要补回去
+    for (const TeacherActivity &a : school.teacherActivities) {
+        if (!m_teacherIdx.contains(a.teacherId) || !school.timeConfig.isValidSlot(a.slotIndex))
+            continue;
+        const int ti = m_teacherIdx[a.teacherId];
+        m_teacherOcc[ti][a.slotIndex][0]++;
+        m_teacherOcc[ti][a.slotIndex][1]++;
+    }
+    for (int s = 0; s < sessions.size(); ++s) {
+        const Placement cur = placements[s];
+        if (cur.slot < 0)
+            continue;
+        apply(s, cur.slot, cur.half); // 占用已清零，这里只累加，placements 写回同一值
+    }
+}
+
 void Problem::apply(int s, int slot, int half)
 {
     placements[s] = {slot, half};
@@ -1151,13 +1183,15 @@ void Solver::clearPlacements()
 
 void Solver::restoreBest()
 {
+    // 按 best 快照逐会话落位。这里不能用 placeWithSync：它会把同组会话一起按「当前」位置放，
+    // 恢复出来的状态与 best 快照并不完全一致（占用表与最终课表对不上，报告里会冒出幽灵硬违例）。
     clearPlacements();
-    for (int s = 0; s < m_p.sessions.size(); ++s) {
-        if (m_p.placements[s].slot >= 0)
-            continue; // 已随同时段组落位
-        if (s < m_bestPlacements.size() && m_bestPlacements[s].slot >= 0)
-            m_p.placeWithSync(s, m_bestPlacements[s].slot, m_bestPlacements[s].half);
+    for (int s = 0; s < m_p.sessions.size() && s < m_bestPlacements.size(); ++s) {
+        const Placement &p = m_bestPlacements[s];
+        if (p.slot >= 0)
+            m_p.apply(s, p.slot, p.half);
     }
+    m_p.rebuildOccupancy(); // 以快照为准重算占用，保证报告与课表一致
 }
 
 Schedule Solver::bestSchedule() const

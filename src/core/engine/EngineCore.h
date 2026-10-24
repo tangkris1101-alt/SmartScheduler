@@ -50,6 +50,7 @@ public:
     // ---- 占用 ----
     void apply(int s, int slot, int half);
     void remove(int s);
+    void rebuildOccupancy();  // 从 placements 重建占用表（消除搜索期的增量账目漂移）
     bool isPlaced(int s) const { return placements[s].slot >= 0; }
 
     // 会话 s 的 length 个连续 slot 覆盖（起始 slot 起）

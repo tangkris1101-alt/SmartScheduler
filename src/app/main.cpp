@@ -160,7 +160,12 @@ int main(int argc, char *argv[])
     if (shotIt != args.cend()) {
         const QString path = shotIt->mid(13);
         const int page = pageIt != args.cend() ? pageIt->mid(7).toInt() : -1;
-        QTimer::singleShot(2500, &app, [&app, path, page]() {
+        // 可选 --project=<spk>：截图前先打开工程（离线检查大工程的界面渲染）
+        for (const auto &a : args) {
+            if (a.startsWith(QStringLiteral("--project=")))
+                appController.openProject(a.mid(10));
+        }
+        QTimer::singleShot(3000, &app, [&app, path, page]() {
             int rc = 2;
             const auto windows = QGuiApplication::allWindows();
             if (!windows.isEmpty()) {
@@ -926,6 +931,93 @@ int main(int argc, char *argv[])
             }
             qWarning("smoke-beta: 门禁行为正确（未通过要码、错码拦下）");
             app.exit(0);
+        });
+        timer->start(500);
+    }
+
+    // 离线验收：--smoke=solve --project=<spk> [--runs=8] 打开工程 → 自动排课 → 应用结果 → 原路径保存
+    // 0 通过（硬违例 0 且全部排上），41=打不开，42=超时，43=有硬违例或没排满，44=保存失败
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("solve")) {
+        QString project;
+        int runs = 8;
+        int iterations = 20000;
+        for (const auto &a : args) {
+            if (a.startsWith(QStringLiteral("--project=")))
+                project = a.mid(10);
+            else if (a.startsWith(QStringLiteral("--runs=")))
+                runs = a.mid(7).toInt();
+            else if (a.startsWith(QStringLiteral("--iter=")))
+                iterations = a.mid(7).toInt();
+        }
+        auto *stage = new int(0);
+        auto *ticks = new int(0);
+        QTimer *timer = new QTimer(&app);
+        QObject::connect(timer, &QTimer::timeout, &app,
+                         [&appController, &app, stage, ticks, timer, project, runs, iterations]() {
+            if (++(*ticks) > 2400) { // 最多 20 分钟
+                timer->stop();
+                qWarning("smoke-solve: 超时（progress=%d）", appController.schedulerProgress());
+                app.exit(42);
+                return;
+            }
+            if (*stage == 0) {
+                if (!appController.openProject(project)) {
+                    timer->stop();
+                    qWarning("smoke-solve: 打开失败 %s", qUtf8Printable(appController.lastError()));
+                    app.exit(41);
+                    return;
+                }
+                qWarning("smoke-solve: 已打开 %s（%d 班 / %d 计划条目）", qUtf8Printable(project),
+                         appController.classCount(), appController.planEntryCount());
+                appController.runScheduler({{QStringLiteral("runs"), runs},
+                                            {QStringLiteral("maxIterations"), iterations}});
+                *stage = 1;
+                return;
+            }
+            if (appController.schedulerRunning())
+                return;
+            if (!appController.resultPending()) {
+                timer->stop();
+                qWarning("smoke-solve: 排课未产生结果（err=%s）",
+                         qUtf8Printable(appController.lastError()));
+                app.exit(43);
+                return;
+            }
+            const QVariantMap rep = appController.schedulerReport();
+            const int placed = rep.value(QStringLiteral("placedSessions")).toInt();
+            const int total = rep.value(QStringLiteral("totalSessions")).toInt();
+            const int hard = rep.value(QStringLiteral("hardViolations")).toInt();
+            qWarning("smoke-solve: 结果 排上=%d/%d 硬违例=%d 软分=%.2f（%s）", placed, total, hard,
+                     rep.value(QStringLiteral("softScore")).toDouble(),
+                     qUtf8Printable(appController.schedulerRunInfo()));
+            const QVariantList unplaced = rep.value(QStringLiteral("unplaced")).toList();
+            for (int i = 0; i < unplaced.size() && i < 12; ++i)
+                qWarning("smoke-solve: 未排 %s", qUtf8Printable(unplaced[i].toString()));
+            appController.applyResult();
+            // 以「应用后的课表」为准复核：引擎内部计数在 restoreBest 之后可能与写入课表不一致
+            const QVariantMap q = appController.qualityReport();
+            const int appliedHard = q.value(QStringLiteral("hardViolations")).toInt();
+            const bool ok = hard == 0 && appliedHard == 0 && placed == total;
+            if (hard != 0 || appliedHard != 0)
+                qWarning("smoke-solve: 引擎计数=%d 应用后硬违例=%d", hard, appliedHard);
+            for (const QVariant &iv : q.value(QStringLiteral("indicators")).toList()) {
+                const QVariantMap im = iv.toMap();
+                if (!im.value(QStringLiteral("hard")).toBool())
+                    continue;
+                qWarning("smoke-solve: 硬指标 %s = %g（要求 %g）",
+                         qUtf8Printable(im.value(QStringLiteral("name")).toString()),
+                         im.value(QStringLiteral("value")).toDouble(),
+                         im.value(QStringLiteral("required")).toDouble());
+            }
+            if (!appController.saveProject()) {
+                timer->stop();
+                qWarning("smoke-solve: 保存失败 %s", qUtf8Printable(appController.lastError()));
+                app.exit(44);
+                return;
+            }
+            timer->stop();
+            qWarning("smoke-solve: %s，已保存", ok ? "通过" : "未达标");
+            app.exit(ok ? 0 : 43);
         });
         timer->start(500);
     }
