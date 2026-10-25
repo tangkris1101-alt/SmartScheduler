@@ -1,11 +1,19 @@
 #include "EngineCore.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 namespace sched::engine {
 
 namespace {
+
+using ProfileClock = std::chrono::steady_clock;
+
+inline double profileMs(ProfileClock::time_point t0)
+{
+    return std::chrono::duration<double, std::milli>(ProfileClock::now() - t0).count();
+}
 
 // 软约束权重
 constexpr double W_PROGRESS = 5.0; // 进度一致（同老师同课相邻节次）
@@ -24,9 +32,11 @@ constexpr double HARD_WEIGHT = 1000.0; // 搜索中硬违例权重
 
 // ==================== Problem ====================
 
-Problem::Problem(const School &s)
+Problem::Problem(const School &s, SolverProfile *prof)
     : school(s)
 {
+    m_prof = prof;
+    const ProfileClock::time_point tBuild = m_prof ? ProfileClock::now() : ProfileClock::time_point{};
     const int sc = slotCount();
     const std::array<int, 2> zero{0, 0};
 
@@ -38,6 +48,18 @@ Problem::Problem(const School &s)
         m_courseIdx[s.courses[i].id] = i;
     for (int i = 0; i < s.classrooms.size(); ++i)
         m_roomIdx[s.classrooms[i].id] = i;
+    for (int i = 0; i < s.planEntries.size(); ++i)
+        m_planIdx[s.planEntries[i].id] = i;
+    for (int ti = 0; ti < s.teachers.size(); ++ti) {
+        const qint64 mg = s.teachers[ti].mutualExclusionGroup;
+        if (mg < 0)
+            continue;
+        if (!m_mutexTeachers.contains(mg))
+            m_mutexGroups.append(mg);
+        m_mutexTeachers[mg].append(ti);
+    }
+    for (qint64 mg : m_mutexGroups)
+        m_mutexActive[mg].assign(sc, zero);
 
     m_classForbidden.resize(s.classes.size());
     m_teacherForbidden.resize(s.teachers.size());
@@ -70,6 +92,11 @@ Problem::Problem(const School &s)
     m_roomOcc.assign(s.classrooms.size(), QVector<std::array<int, 2>>(sc, zero));
     m_courseClsOcc.assign(s.courses.size(), QVector<std::array<int, 2>>(sc, zero));
 
+    m_days = s.timeConfig.daysPerWeek;
+    m_teacherDayCount.assign(s.teachers.size(), QVector<int>(m_days, 0));
+    m_teacherDailyCost.assign(s.teachers.size(), 0.0);
+    m_entryMorningCount.assign(s.planEntries.size(), 0);
+
     // 老师活动时间预置为占用（两个 parity 都占）
     for (const auto &a : s.teacherActivities) {
         if (!m_teacherIdx.contains(a.teacherId) || !s.timeConfig.isValidSlot(a.slotIndex))
@@ -78,12 +105,15 @@ Problem::Problem(const School &s)
         m_teacherOcc[ti][a.slotIndex][0]++;
         m_teacherOcc[ti][a.slotIndex][1]++;
     }
+    recomputeOccupancyHard(); // 老师活动造成的初始占用（正常为 0 违例）
 
     expandSessions();
     mergeCombined();
     applyPreAssignments();
     buildSyncPeers();
     placements.resize(sessions.size());
+    if (m_prof)
+        m_prof->buildMs += profileMs(tBuild);
 }
 
 Session Problem::makeSession(const PlanEntry &e, int length, bool half) const
@@ -235,10 +265,214 @@ QVector<int> Problem::coveredSlots(int s, int startSlot) const
     return out;
 }
 
+void Problem::updateSoftAggregates(int s, int slot, int delta)
+{
+    const int sc = slotCount();
+    if (slot < 0 || slot >= sc)
+        return;
+    const Session &ss = sessions[s];
+    const int ppd = periodsPerDay();
+    const int morning = school.timeConfig.morningPeriods;
+
+    // 进度一致：同老师 + 同课程 + 同进度组，按起始 slot 计
+    for (qint64 t : ss.teacherIds) {
+        const ProgressKey key{t, ss.courseId, ss.progressGroup};
+        auto it = m_progressGroups.find(key);
+        if (it == m_progressGroups.end()) {
+            if (delta < 0)
+                continue;
+            it = m_progressGroups.insert(key, ProgressGroup(sc));
+        }
+        it->slotCount[slot] += delta;
+        recomputeProgressCost(it.value());
+        bool any = false;
+        for (int c : it->slotCount) {
+            if (c > 0) {
+                any = true;
+                break;
+            }
+        }
+        if (!any)
+            m_progressGroups.erase(it);
+    }
+
+    // 老师日课时：按覆盖的每一节计
+    for (qint64 t : ss.teacherIds) {
+        const auto it = m_teacherIdx.constFind(t);
+        if (it == m_teacherIdx.constEnd())
+            continue;
+        const int ti = it.value();
+        for (int k = 0; k < ss.length; ++k) {
+            const int sl = slot + k;
+            if (sl >= 0 && sl < sc)
+                m_teacherDayCount[ti][sl / ppd] += delta;
+        }
+        recomputeTeacherDailyCost(ti);
+    }
+
+    // 同班同课分布：原逻辑只按起始 slot 所在天计一次
+    const int day = slot / ppd;
+    for (qint64 cls : ss.classIds) {
+        const QPair<qint64, qint64> key{cls, ss.courseId};
+        auto it = m_classCourseGroups.find(key);
+        if (it == m_classCourseGroups.end()) {
+            if (delta < 0)
+                continue;
+            it = m_classCourseGroups.insert(key, ClassCourseGroup(m_days));
+        }
+        it->perDay[day] += delta;
+        recomputeClassCourseCost(it.value());
+        bool any = false;
+        for (int c : it->perDay) {
+            if (c > 0) {
+                any = true;
+                break;
+            }
+        }
+        if (!any)
+            m_classCourseGroups.erase(it);
+    }
+
+    // 计划条目的上午节数：按覆盖节次中属于上午的节数计
+    if (ss.entryId >= 0) {
+        const auto it = m_planIdx.constFind(ss.entryId);
+        if (it != m_planIdx.constEnd()) {
+            int &have = m_entryMorningCount[it.value()];
+            for (int k = 0; k < ss.length; ++k) {
+                const int sl = slot + k;
+                if (sl >= 0 && sl < sc && (sl % ppd) < morning)
+                    have += delta;
+            }
+        }
+    }
+}
+
+void Problem::resetSoftAggregates()
+{
+    m_progressGroups.clear();
+    for (auto &v : m_teacherDayCount)
+        std::fill(v.begin(), v.end(), 0);
+    std::fill(m_teacherDailyCost.begin(), m_teacherDailyCost.end(), 0.0);
+    m_classCourseGroups.clear();
+    std::fill(m_entryMorningCount.begin(), m_entryMorningCount.end(), 0);
+}
+
+void Problem::recomputeProgressCost(ProgressGroup &g) const
+{
+    double c = 0;
+    int prev = -1;
+    for (int sl = 0; sl < g.slotCount.size(); ++sl) {
+        if (g.slotCount[sl] <= 0)
+            continue;
+        if (prev >= 0)
+            c += std::max(0, sl - prev - 1);
+        prev = sl;
+    }
+    g.cost = W_PROGRESS * c;
+}
+
+void Problem::recomputeTeacherDailyCost(int ti)
+{
+    const int maxPerDay = school.teachers[ti].maxPeriodsPerDay;
+    double penalty = 0;
+    double sq = 0;
+    const QVector<int> &perDay = m_teacherDayCount[ti];
+    for (int d = 0; d < perDay.size(); ++d) {
+        const int n = perDay[d];
+        if (maxPerDay >= 0 && n > maxPerDay)
+            penalty += W_DAILY_MAX * (n - maxPerDay);
+        sq += double(n) * n;
+    }
+    m_teacherDailyCost[ti] = penalty + W_DAILY_BALANCE * sq;
+}
+
+void Problem::recomputeClassCourseCost(ClassCourseGroup &g) const
+{
+    double c = 0;
+    for (int n : g.perDay)
+        c += double(n) * (n - 1) / 2.0;
+    g.cost = W_CLASS_COURSE_SPREAD * c;
+}
+
+void Problem::recomputeOccupancyHard()
+{
+    m_hardClass = 0;
+    m_hardTeacher = 0;
+    m_hardMutex = 0;
+    m_hardRoom = 0;
+    const int sc = slotCount();
+
+    for (int i = 0; i < school.classes.size(); ++i)
+        for (int sl = 0; sl < sc; ++sl)
+            for (int p = 0; p < 2; ++p)
+                m_hardClass += std::max(0, m_classOcc[i][sl][p] - 1);
+    for (int i = 0; i < school.teachers.size(); ++i)
+        for (int sl = 0; sl < sc; ++sl)
+            for (int p = 0; p < 2; ++p)
+                m_hardTeacher += std::max(0, m_teacherOcc[i][sl][p] - 1);
+
+    for (auto &v : m_mutexActive)
+        for (auto &a : v)
+            a = {0, 0};
+    for (qint64 mg : m_mutexGroups) {
+        const auto git = m_mutexTeachers.constFind(mg);
+        if (git == m_mutexTeachers.constEnd())
+            continue;
+        auto &active = m_mutexActive[mg];
+        for (int sl = 0; sl < sc; ++sl) {
+            for (int p = 0; p < 2; ++p) {
+                int cnt = 0;
+                for (int ti : git.value()) {
+                    if (m_teacherOcc[ti][sl][p] > 0)
+                        ++cnt;
+                }
+                active[sl][p] = cnt;
+                m_hardMutex += std::max(0, cnt - 1);
+            }
+        }
+    }
+
+    for (int i = 0; i < school.classrooms.size(); ++i)
+        for (int sl = 0; sl < sc; ++sl)
+            for (int p = 0; p < 2; ++p)
+                m_hardRoom += std::max(0, m_roomOcc[i][sl][p] - school.classrooms[i].capacity);
+}
+
+int Problem::forbiddenCountFor(int s, int slot) const
+{
+    const Session &ss = sessions[s];
+    const int sc = slotCount();
+    int f = 0;
+    for (int k = 0; k < ss.length; ++k) {
+        const int sl = slot + k;
+        if (sl < 0 || sl >= sc)
+            continue;
+        for (qint64 c : ss.classIds) {
+            if (m_classIdx.contains(c) && m_classForbidden[m_classIdx[c]].contains(sl))
+                ++f;
+        }
+        if (m_courseIdx.contains(ss.courseId)
+            && m_courseForbidden[m_courseIdx[ss.courseId]].contains(sl))
+            ++f;
+        for (qint64 t : ss.teacherIds) {
+            if (ss.noLoad)
+                continue;
+            if (m_teacherIdx.contains(t) && m_teacherForbidden[m_teacherIdx[t]].contains(sl))
+                ++f;
+        }
+        if (ss.classroomId >= 0 && m_roomIdx.contains(ss.classroomId)
+            && m_roomForbidden[m_roomIdx[ss.classroomId]].contains(sl))
+            ++f;
+    }
+    return f;
+}
+
 // 从 placements 重建占用表：局部搜索里的增量加减一旦漂移，
 // 最终报告会出现「课表本身干净、引擎却说有违例」的幽灵数字
 void Problem::rebuildOccupancy()
 {
+    resetSoftAggregates();
+    m_hardForbidden = 0;
     for (auto &v : m_classOcc)
         for (auto &a : v)
             a = {0, 0};
@@ -259,6 +493,7 @@ void Problem::rebuildOccupancy()
         m_teacherOcc[ti][a.slotIndex][0]++;
         m_teacherOcc[ti][a.slotIndex][1]++;
     }
+    recomputeOccupancyHard(); // 老师活动造成的初始占用
     for (int s = 0; s < sessions.size(); ++s) {
         const Placement cur = placements[s];
         if (cur.slot < 0)
@@ -277,22 +512,59 @@ void Problem::apply(int s, int slot, int half)
     const int p1 = (half == 1) ? 0 : 1;
     const int nCls = ss.classIds.size();
     const bool hasCourse = m_courseIdx.contains(ss.courseId);
-    for (int sl : coveredSlots(s, slot)) {
+    const int sc = slotCount();
+    for (int k = 0; k < ss.length; ++k) {
+        const int sl = slot + k;
+        if (sl < 0 || sl >= sc)
+            continue;
         for (int p = p0; p <= p1; ++p) {
             for (qint64 c : ss.classIds) {
-                if (m_classIdx.contains(c))
-                    m_classOcc[m_classIdx[c]][sl][p]++;
+                const auto ci = m_classIdx.constFind(c);
+                if (ci == m_classIdx.constEnd())
+                    continue;
+                int &cell = m_classOcc[ci.value()][sl][p];
+                const int old = cell;
+                ++cell;
+                if (old >= 1)
+                    ++m_hardClass;
             }
             for (qint64 t : ss.teacherIds) {
-                if (!ss.noLoad && m_teacherIdx.contains(t))
-                    m_teacherOcc[m_teacherIdx[t]][sl][p]++;
+                if (ss.noLoad)
+                    continue;
+                const auto tiIt = m_teacherIdx.constFind(t);
+                if (tiIt == m_teacherIdx.constEnd())
+                    continue;
+                const int ti = tiIt.value();
+                int &cell = m_teacherOcc[ti][sl][p];
+                const int old = cell;
+                ++cell;
+                if (old >= 1)
+                    ++m_hardTeacher;
+                const qint64 mg = school.teachers[ti].mutualExclusionGroup;
+                if (mg >= 0 && old == 0) {
+                    auto &active = m_mutexActive[mg][sl][p];
+                    const int oldActive = active;
+                    ++active;
+                    if (oldActive >= 1)
+                        ++m_hardMutex;
+                }
             }
-            if (ss.classroomId >= 0 && m_roomIdx.contains(ss.classroomId))
-                m_roomOcc[m_roomIdx[ss.classroomId]][sl][p]++;
+            if (ss.classroomId >= 0) {
+                const auto ri = m_roomIdx.constFind(ss.classroomId);
+                if (ri != m_roomIdx.constEnd()) {
+                    int &cell = m_roomOcc[ri.value()][sl][p];
+                    const int old = cell;
+                    ++cell;
+                    if (old >= school.classrooms[ri.value()].capacity)
+                        ++m_hardRoom;
+                }
+            }
             if (hasCourse)
                 m_courseClsOcc[m_courseIdx[ss.courseId]][sl][p] += nCls;
         }
     }
+    m_hardForbidden += forbiddenCountFor(s, slot);
+    updateSoftAggregates(s, slot, +1);
 }
 
 void Problem::remove(int s)
@@ -306,22 +578,59 @@ void Problem::remove(int s)
     const int p1 = (cur.half == 1) ? 0 : 1;
     const int nCls = ss.classIds.size();
     const bool hasCourse = m_courseIdx.contains(ss.courseId);
-    for (int sl : coveredSlots(s, cur.slot)) {
+    const int sc = slotCount();
+    for (int k = 0; k < ss.length; ++k) {
+        const int sl = cur.slot + k;
+        if (sl < 0 || sl >= sc)
+            continue;
         for (int p = p0; p <= p1; ++p) {
             for (qint64 c : ss.classIds) {
-                if (m_classIdx.contains(c))
-                    m_classOcc[m_classIdx[c]][sl][p]--;
+                const auto ci = m_classIdx.constFind(c);
+                if (ci == m_classIdx.constEnd())
+                    continue;
+                int &cell = m_classOcc[ci.value()][sl][p];
+                const int old = cell;
+                --cell;
+                if (old >= 2)
+                    --m_hardClass;
             }
             for (qint64 t : ss.teacherIds) {
-                if (!ss.noLoad && m_teacherIdx.contains(t))
-                    m_teacherOcc[m_teacherIdx[t]][sl][p]--;
+                if (ss.noLoad)
+                    continue;
+                const auto tiIt = m_teacherIdx.constFind(t);
+                if (tiIt == m_teacherIdx.constEnd())
+                    continue;
+                const int ti = tiIt.value();
+                int &cell = m_teacherOcc[ti][sl][p];
+                const int old = cell;
+                --cell;
+                if (old >= 2)
+                    --m_hardTeacher;
+                const qint64 mg = school.teachers[ti].mutualExclusionGroup;
+                if (mg >= 0 && old == 1) {
+                    auto &active = m_mutexActive[mg][sl][p];
+                    const int oldActive = active;
+                    --active;
+                    if (oldActive >= 2)
+                        --m_hardMutex;
+                }
             }
-            if (ss.classroomId >= 0 && m_roomIdx.contains(ss.classroomId))
-                m_roomOcc[m_roomIdx[ss.classroomId]][sl][p]--;
+            if (ss.classroomId >= 0) {
+                const auto ri = m_roomIdx.constFind(ss.classroomId);
+                if (ri != m_roomIdx.constEnd()) {
+                    int &cell = m_roomOcc[ri.value()][sl][p];
+                    const int old = cell;
+                    --cell;
+                    if (old > school.classrooms[ri.value()].capacity)
+                        --m_hardRoom;
+                }
+            }
             if (hasCourse)
                 m_courseClsOcc[m_courseIdx[ss.courseId]][sl][p] -= nCls;
         }
     }
+    m_hardForbidden -= forbiddenCountFor(s, cur.slot);
+    updateSoftAggregates(s, cur.slot, -1);
 }
 
 // 建立「同时段组」的会话映射：组内每个成员的第 k 次课互相同步
@@ -473,67 +782,12 @@ int Problem::hardAtNoSync(int s, int slot, int half) const
 
 int Problem::hardViolations() const
 {
-    int v = 0;
-    const int sc = slotCount();
-    for (int i = 0; i < school.classes.size(); ++i)
-        for (int sl = 0; sl < sc; ++sl)
-            for (int p = 0; p < 2; ++p)
-                v += std::max(0, m_classOcc[i][sl][p] - 1);
-    for (int i = 0; i < school.teachers.size(); ++i)
-        for (int sl = 0; sl < sc; ++sl)
-            for (int p = 0; p < 2; ++p)
-                v += std::max(0, m_teacherOcc[i][sl][p] - 1);
-    // 互斥组（按老师出现顺序枚举组，避免哈希序不确定）
-    QVector<qint64> mutexGroups;
-    for (const Teacher &t : school.teachers) {
-        if (t.mutualExclusionGroup >= 0 && !mutexGroups.contains(t.mutualExclusionGroup))
-            mutexGroups.append(t.mutualExclusionGroup);
-    }
-    for (qint64 mg : mutexGroups) {
-        for (int sl = 0; sl < sc; ++sl) {
-            for (int p = 0; p < 2; ++p) {
-                int cnt = 0;
-                for (int i = 0; i < school.teachers.size(); ++i) {
-                    if (school.teachers[i].mutualExclusionGroup == mg
-                        && m_teacherOcc[i][sl][p] > 0)
-                        cnt++;
-                }
-                v += std::max(0, cnt - 1);
-            }
-        }
-    }
-    for (int i = 0; i < school.classrooms.size(); ++i)
-        for (int sl = 0; sl < sc; ++sl)
-            for (int p = 0; p < 2; ++p)
-                v += std::max(0, m_roomOcc[i][sl][p] - school.classrooms[i].capacity);
-    // 不排时间（老师活动已折算进占用表）
-    for (int s = 0; s < sessions.size(); ++s) {
-        if (!isPlaced(s))
-            continue;
-        const Session &ss = sessions[s];
-        for (int sl : coveredSlots(s, placements[s].slot)) {
-            for (qint64 c : ss.classIds) {
-                if (m_classIdx.contains(c) && m_classForbidden[m_classIdx[c]].contains(sl))
-                    v++;
-            }
-            if (m_courseIdx.contains(ss.courseId)
-                && m_courseForbidden[m_courseIdx[ss.courseId]].contains(sl))
-                v++;
-            for (qint64 t : ss.teacherIds) {
-                if (ss.noLoad) // 不挂老师：老师禁排、撞课都不算它
-                    continue;
-                if (m_teacherIdx.contains(t) && m_teacherForbidden[m_teacherIdx[t]].contains(sl))
-                    v++;
-            }
-            if (ss.classroomId >= 0 && m_roomIdx.contains(ss.classroomId)
-                && m_roomForbidden[m_roomIdx[ss.classroomId]].contains(sl))
-                v++;
-        }
-    }
+    const ProfileClock::time_point t0 = m_prof ? ProfileClock::now() : ProfileClock::time_point{};
+    int v = m_hardClass + m_hardTeacher + m_hardMutex + m_hardRoom + m_hardForbidden;
     // 未排会话
     for (int s = 0; s < sessions.size(); ++s)
         if (!isPlaced(s))
-            v++;
+            ++v;
     // 同时段组落位不一致（例如同组两条固定预排被钉在不同节）
     for (auto it = m_syncPeers.constBegin(); it != m_syncPeers.constEnd(); ++it) {
         const Placement &a = placements[it.key()];
@@ -546,6 +800,10 @@ int Problem::hardViolations() const
             if (b.slot != a.slot || b.half != a.half)
                 ++v;
         }
+    }
+    if (m_prof) {
+        ++m_prof->hardViolationCalls;
+        m_prof->hardViolationMs += profileMs(t0);
     }
     return v;
 }
@@ -710,26 +968,22 @@ double Problem::chainCrossCost() const
 
 double Problem::localSoft(int s) const
 {
+    const ProfileClock::time_point t0 = m_prof ? ProfileClock::now() : ProfileClock::time_point{};
+    ProfileClock::time_point tb = m_prof ? ProfileClock::now() : ProfileClock::time_point{};
     // 与 s 相关的聚合键重算（移动单会话时这些键之外的分项不变，可作精确增量）
     double cost = 0;
     const Session &ss = sessions[s];
 
-    // 进度一致：s 的每个 (老师,课程,进度组)
+    // 进度一致：s 的每个 (老师,课程,进度组)，直接查增量聚合
     const int ppd = periodsPerDay();
     for (qint64 t : ss.teacherIds) {
-        QVector<int> slots;
-        for (int i = 0; i < sessions.size(); ++i) {
-            if (isPlaced(i) && sessions[i].courseId == ss.courseId
-                && sessions[i].progressGroup == ss.progressGroup
-                && sessions[i].teacherIds.contains(t))
-                slots.append(placements[i].slot);
-        }
-        std::sort(slots.begin(), slots.end());
-        slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
-        double c = 0;
-        for (int i = 1; i < slots.size(); ++i)
-            c += std::max(0, slots[i] - slots[i - 1] - 1);
-        cost += W_PROGRESS * c;
+        const auto it = m_progressGroups.constFind(ProgressKey{t, ss.courseId, ss.progressGroup});
+        if (it != m_progressGroups.constEnd())
+            cost += it->cost;
+    }
+    if (m_prof) {
+        m_prof->localSoftProgressMs += profileMs(tb);
+        tb = ProfileClock::now();
     }
 
     // 平均分布：s 的课程整体（读增量维护的课程-节次班级数表）
@@ -743,6 +997,10 @@ double Problem::localSoft(int s) const
             }
         }
         cost += W_EVEN_SPREAD * c;
+    }
+    if (m_prof) {
+        m_prof->localSoftEvenSpreadMs += profileMs(tb);
+        tb = ProfileClock::now();
     }
 
     // 上下午 / 主课 / 连课跨界：仅 s 自身位置
@@ -764,74 +1022,60 @@ double Problem::localSoft(int s) const
                 cost += W_CHAIN_CROSS;
         }
     }
-
-    // 老师日课时：s 的每个老师整体
-    const int days = school.timeConfig.daysPerWeek;
-    for (qint64 t : ss.teacherIds) {
-        if (!m_teacherIdx.contains(t))
-            continue;
-        const int ti = m_teacherIdx[t];
-        QVector<int> perDay(days, 0);
-        for (int i = 0; i < sessions.size(); ++i) {
-            if (isPlaced(i) && sessions[i].teacherIds.contains(t)) {
-                for (int sl : coveredSlots(i, placements[i].slot))
-                    perDay[sl / ppd]++;
-            }
-        }
-        const int maxPerDay = school.teachers[ti].maxPeriodsPerDay;
-        double sq = 0;
-        for (int d = 0; d < days; ++d) {
-            if (maxPerDay >= 0 && perDay[d] > maxPerDay)
-                cost += W_DAILY_MAX * (perDay[d] - maxPerDay);
-            sq += double(perDay[d]) * perDay[d];
-        }
-        cost += W_DAILY_BALANCE * sq;
+    if (m_prof) {
+        m_prof->localSoftAmPmMs += profileMs(tb);
+        tb = ProfileClock::now();
     }
 
-    // 同班同课分布：s 的每个 (班,课程)
+    // 老师日课时：s 的每个老师整体，直接查增量聚合
+    for (qint64 t : ss.teacherIds) {
+        const auto it = m_teacherIdx.constFind(t);
+        if (it != m_teacherIdx.constEnd())
+            cost += m_teacherDailyCost[it.value()];
+    }
+    if (m_prof) {
+        m_prof->localSoftTeacherDailyMs += profileMs(tb);
+        tb = ProfileClock::now();
+    }
+
+    // 同班同课分布：s 的每个 (班,课程)，直接查增量聚合
     for (qint64 cls : ss.classIds) {
-        QHash<int, int> perDay;
-        for (int i = 0; i < sessions.size(); ++i) {
-            if (isPlaced(i) && sessions[i].courseId == ss.courseId
-                && sessions[i].classIds.contains(cls))
-                perDay[placements[i].slot / ppd]++;
-        }
-        for (auto it = perDay.begin(); it != perDay.end(); ++it)
-            cost += W_CLASS_COURSE_SPREAD * double(it.value()) * (it.value() - 1) / 2.0;
+        const auto it = m_classCourseGroups.constFind(QPair<qint64, qint64>{cls, ss.courseId});
+        if (it != m_classCourseGroups.constEnd())
+            cost += it->cost;
+    }
+    if (m_prof) {
+        m_prof->localSoftClassSpreadMs += profileMs(tb);
+        tb = ProfileClock::now();
     }
 
     // 计划条目的时段要求（上午节数 / 前 N 节）：只与 s 所属条目相关
     if (isPlaced(s) && ss.entryId >= 0) {
-        const PlanEntry *entry = nullptr;
-        for (const auto &e : school.planEntries) {
-            if (e.id == ss.entryId) {
-                entry = &e;
-                break;
-            }
-        }
-        if (entry) {
+        const int entryIdx = m_planIdx.value(ss.entryId, -1);
+        if (entryIdx >= 0) {
+            const PlanEntry &entry = school.planEntries[entryIdx];
             const int morningP = school.timeConfig.morningPeriods;
-            if (entry->morningPeriods > 0) {
-                int have = 0;
-                for (int i = 0; i < sessions.size(); ++i) {
-                    if (!isPlaced(i) || sessions[i].entryId != ss.entryId)
-                        continue;
-                    for (int sl : coveredSlots(i, placements[i].slot)) {
-                        if (sl % ppd < morningP)
-                            ++have;
-                    }
-                }
-                cost += W_PLAN_MORNING * std::max(0, entry->morningPeriods - have);
+            if (entry.morningPeriods > 0) {
+                const int have = m_entryMorningCount[entryIdx];
+                cost += W_PLAN_MORNING * std::max(0, entry.morningPeriods - have);
             }
-            if (entry->earlyPeriods > 0) {
-                for (int sl : coveredSlots(s, placements[s].slot)) {
-                    if (sl % ppd >= entry->earlyPeriods)
+            if (entry.earlyPeriods > 0) {
+                const int start = placements[s].slot;
+                const int sc = slotCount();
+                for (int k = 0; k < ss.length; ++k) {
+                    const int sl = start + k;
+                    if (sl >= 0 && sl < sc && sl % ppd >= entry.earlyPeriods)
                         cost += W_PLAN_EARLY;
                 }
             }
         }
     }
 
+    if (m_prof) {
+        m_prof->localSoftPlanMs += profileMs(tb);
+        ++m_prof->localSoftCalls;
+        m_prof->localSoftMs += profileMs(t0);
+    }
     return cost;
 }
 
@@ -979,7 +1223,8 @@ Schedule Problem::toSchedule() const
 
 Solver::Solver(const School &school, const EngineOptions &options, quint32 seed,
                std::atomic<bool> *cancelFlag, std::atomic<long> *iterCounter)
-    : m_p(school)
+    : m_profileOn(qEnvironmentVariableIsSet("SMARTSCHED_PROFILE"))
+    , m_p(school, m_profileOn ? &m_prof : nullptr)
     , m_opt(options)
     , m_rng(seed)
     , m_cancel(cancelFlag)
@@ -1057,6 +1302,7 @@ double Solver::localCost(int s)
 
 void Solver::minConflicts(long budget)
 {
+    long done = 0;
     for (long it = 0; it < budget; ++it) {
         if ((it & 0x3F) == 0 && m_cancel && m_cancel->load())
             break;
@@ -1065,29 +1311,43 @@ void Solver::minConflicts(long budget)
         if (m_curHard == 0 && m_curSoft <= 1e-9)
             break; // 已完美
 
+        ProfileClock::time_point t = m_profileOn ? ProfileClock::now() : ProfileClock::time_point{};
+
         // 选一个当前有代价的会话（采样失败则全扫）
         int s = -1;
-        QVector<int> movable;
-        for (int i = 0; i < m_p.sessions.size(); ++i)
-            if (!m_p.sessions[i].fixed)
-                movable.append(i);
-        if (movable.isEmpty())
+        if (!m_movableBuilt) {
+            m_movableBuilt = true;
+            for (int i = 0; i < m_p.sessions.size(); ++i)
+                if (!m_p.sessions[i].fixed)
+                    m_movable.append(i);
+        }
+        if (m_movable.isEmpty()) {
+            if (m_profileOn)
+                m_prof.selectMs += profileMs(t);
             break;
+        }
         for (int tries = 0; tries < 10 && s < 0; ++tries) {
-            const int cand = movable[m_rng.bounded(movable.size())];
+            const int cand = m_movable[m_rng.bounded(m_movable.size())];
             if (localCost(cand) > 1e-9)
                 s = cand;
         }
         if (s < 0) {
-            for (int cand : movable) {
+            for (int cand : m_movable) {
                 if (localCost(cand) > 1e-9) {
                     s = cand;
                     break;
                 }
             }
         }
-        if (s < 0)
+        if (s < 0) {
+            if (m_profileOn)
+                m_prof.selectMs += profileMs(t);
             break; // 全部零代价
+        }
+        if (m_profileOn) {
+            m_prof.selectMs += profileMs(t);
+            t = ProfileClock::now();
+        }
 
         // 评估所有候选位置，选代价最小者（平手随机，保持多样性）
         const Placement cur = m_p.placements[s];
@@ -1118,12 +1378,22 @@ void Solver::minConflicts(long budget)
 
         // 软罚分增量更新（只动了 s，聚合键之外的项不变）；硬违例全量重算（开销小且精确）
         m_curSoft += m_p.localSoft(s) - softBefore;
+        if (m_profileOn) {
+            m_prof.candidateEvalMs += profileMs(t);
+            t = ProfileClock::now();
+        }
         m_curHard = m_p.hardViolations();
+        if (m_profileOn)
+            t = ProfileClock::now();
         tryUpdateBest();
+        if (m_profileOn) {
+            m_prof.snapshotMs += profileMs(t);
+            t = ProfileClock::now();
+        }
 
         // 随机扰动防局部最优
-        if (m_rng.generateDouble() < 0.02 && !movable.isEmpty()) {
-            const int rs = movable[m_rng.bounded(movable.size())];
+        if (m_rng.generateDouble() < 0.02 && !m_movable.isEmpty()) {
+            const int rs = m_movable[m_rng.bounded(m_movable.size())];
             if (!m_p.sessions[rs].fixed) {
                 const QVector<Placement> rc = m_p.candidatePositions(rs);
                 if (!rc.isEmpty()) {
@@ -1137,7 +1407,12 @@ void Solver::minConflicts(long budget)
                 }
             }
         }
+        if (m_profileOn)
+            m_prof.perturbMs += profileMs(t);
+        ++done;
     }
+    if (m_profileOn)
+        m_prof.iterations += done;
 }
 
 void Solver::tryUpdateBest()
@@ -1152,26 +1427,71 @@ void Solver::tryUpdateBest()
 
 void Solver::run()
 {
+    const ProfileClock::time_point tRun = m_profileOn ? ProfileClock::now() : ProfileClock::time_point{};
     attempt(m_opt.maxIterationsPerRun);
+
+    // m_bestHard 是搜索期的增量计数，可能因占用表漂移而“假阳性”。
+    // 先按最优快照重建占用表复核一次；确实有硬违例才值得清空重跑，
+    // 否则白付一次贪心 + 迭代的代价。
+    bool restored = false;
+    auto verifyBest = [this, &restored]() {
+        restoreBest();
+        m_curHard = m_p.hardViolations();
+        m_bestHard = m_curHard;
+        restored = true;
+    };
+    if (m_bestHard > 0)
+        verifyBest();
+
     // 一轮跑完仍有硬违例（实测偶发：198/198 全排上、却留下 1 处撞课）时换随机起点再来，
-    // 取违例最少者。只在没清零时才付代价，正常情况下不增加任何开销。
+    // 取违例最少者。只在复核后仍有违例时才付代价。
     for (int retry = 0; retry < std::max(0, m_opt.hardRetries) && m_bestHard > 0; ++retry) {
         if (m_cancel && m_cancel->load())
             break;
         clearPlacements();
+        restored = false;
         attempt(std::max<long>(2000, m_opt.maxIterationsPerRun / 2));
+        if (m_bestHard > 0)
+            verifyBest();
     }
-    restoreBest();
+    const ProfileClock::time_point tRestore = m_profileOn ? ProfileClock::now() : ProfileClock::time_point{};
+    if (!restored)
+        restoreBest();
+    if (m_profileOn) {
+        m_prof.restoreMs += profileMs(tRestore);
+        m_prof.totalMs += profileMs(tRun);
+    }
 }
 
 void Solver::attempt(long budget)
 {
+    if (m_profileOn)
+        ++m_prof.attempts;
+
+    auto t = m_profileOn ? ProfileClock::now() : ProfileClock::time_point{};
     placeFixed();
+    if (m_profileOn) {
+        m_prof.fixedMs += profileMs(t);
+        t = ProfileClock::now();
+    }
+
     greedy();
+    if (m_profileOn) {
+        m_prof.greedyMs += profileMs(t);
+        t = ProfileClock::now();
+    }
+
     m_curHard = m_p.hardViolations();
     m_curSoft = m_p.softScore();
     tryUpdateBest();
+    if (m_profileOn) {
+        m_prof.initEvalMs += profileMs(t);
+        t = ProfileClock::now();
+    }
+
     minConflicts(budget);
+    if (m_profileOn)
+        m_prof.minConflictsMs += profileMs(t);
 }
 
 // 清空全部落位（固定预排的 fixed 标记保留，下一轮 placeFixed 会重新钉回去）
@@ -1183,15 +1503,10 @@ void Solver::clearPlacements()
 
 void Solver::restoreBest()
 {
-    // 按 best 快照逐会话落位。这里不能用 placeWithSync：它会把同组会话一起按「当前」位置放，
-    // 恢复出来的状态与 best 快照并不完全一致（占用表与最终课表对不上，报告里会冒出幽灵硬违例）。
-    clearPlacements();
-    for (int s = 0; s < m_p.sessions.size() && s < m_bestPlacements.size(); ++s) {
-        const Placement &p = m_bestPlacements[s];
-        if (p.slot >= 0)
-            m_p.apply(s, p.slot, p.half);
-    }
-    m_p.rebuildOccupancy(); // 以快照为准重算占用，保证报告与课表一致
+    // 直接把 placements 指向最优快照，再重建占用/聚合表。
+    // 不能逐会话 placeWithSync：同组会话会被按“当前”位置一起放，快照与占用对不上。
+    m_p.placements = m_bestPlacements;
+    m_p.rebuildOccupancy();
 }
 
 Schedule Solver::bestSchedule() const

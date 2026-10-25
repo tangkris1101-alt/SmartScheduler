@@ -4,6 +4,7 @@
 #include "model/School.h"
 
 #include <QHash>
+#include <QPair>
 #include <QRandomGenerator>
 #include <QSet>
 #include <array>
@@ -35,11 +36,42 @@ struct Placement {
     int half = 0;  // 0 整节，1 单周，2 双周
 };
 
+// localSoft 的增量聚合键：同老师、同课程、同进度组
+struct ProgressKey {
+    qint64 teacher = -1;
+    qint64 course = -1;
+    int group = -1;
+    bool operator==(const ProgressKey &) const = default;
+};
+
+inline size_t qHash(const ProgressKey &k, size_t seed = 0) noexcept
+{
+    return qHashMulti(seed, k.teacher, k.course, k.group);
+}
+
+struct ProgressGroup {
+    QVector<int> slotCount; // [slot] → 该组在此 slot 起始的会话数
+    double cost = 0.0;
+    explicit ProgressGroup(int slots = 0)
+        : slotCount(slots, 0)
+    {
+    }
+};
+
+struct ClassCourseGroup {
+    QVector<int> perDay; // [day] → 该班该课在此天起始的会话数
+    double cost = 0.0;
+    explicit ClassCourseGroup(int days = 0)
+        : perDay(days, 0)
+    {
+    }
+};
+
 // 问题状态：展开后的会话、占用表、约束评估
 class Problem
 {
 public:
-    explicit Problem(const School &school);
+    explicit Problem(const School &school, SolverProfile *prof = nullptr);
 
     const School &school;
     QVector<Session> sessions;
@@ -90,6 +122,17 @@ private:
     void mergeCombined();
     void applyPreAssignments();
 
+    // 软约束增量聚合：apply/remove 时维护，localSoft 直接查
+    void updateSoftAggregates(int s, int slot, int delta);
+    void resetSoftAggregates();
+    void recomputeProgressCost(ProgressGroup &g) const;
+    void recomputeTeacherDailyCost(int ti);
+    void recomputeClassCourseCost(ClassCourseGroup &g) const;
+
+    // 硬违例增量缓存：apply/remove 维护，hardViolations 直接相加
+    void recomputeOccupancyHard();
+    int forbiddenCountFor(int s, int slot) const;
+
     // 软约束分项（按会话/键聚合）
     double progressAlignCost() const;
     double evenSpreadCost() const;
@@ -102,12 +145,36 @@ private:
     double chainCrossCost() const;
 
     QHash<qint64, int> m_classIdx, m_teacherIdx, m_courseIdx, m_roomIdx;
+    QHash<qint64, int> m_planIdx; // planEntry id → 下标（localSoft 避免线性查找）
     QVector<QSet<int>> m_classForbidden, m_teacherForbidden, m_courseForbidden, m_roomForbidden;
+
+    // 互斥老师分组预计算，避免 hardViolations 每次重扫全部老师
+    QVector<qint64> m_mutexGroups;
+    QHash<qint64, QVector<int>> m_mutexTeachers;
+
+    // localSoft 的增量聚合表
+    QHash<ProgressKey, ProgressGroup> m_progressGroups;
+    QVector<QVector<int>> m_teacherDayCount; // [teacher][day]
+    QVector<double> m_teacherDailyCost;
+    QHash<QPair<qint64, qint64>, ClassCourseGroup> m_classCourseGroups;
+    QVector<int> m_entryMorningCount; // 每个计划条目已排在上午的节数
+    int m_days = 0;
+
+    // 硬违例增量缓存
+    int m_hardClass = 0;
+    int m_hardTeacher = 0;
+    int m_hardMutex = 0;
+    int m_hardRoom = 0;
+    int m_hardForbidden = 0;
+    QHash<qint64, QVector<std::array<int, 2>>> m_mutexActive; // 互斥组内每个 slot/parity 有课的老师数
 
     // 占用计数 [实体][slot][parity]，parity 0=单周 1=双周；整节两者都 +1
     QVector<QVector<std::array<int, 2>>> m_classOcc, m_teacherOcc, m_roomOcc;
     // 课程-节次班级数 [课程][slot][parity]（evenSpread 评分用，随 apply/remove 增量维护）
     QVector<QVector<std::array<int, 2>>> m_courseClsOcc;
+
+    // 非空时才计时；由 Solver 在开启 SMARTSCHED_PROFILE 时传入
+    SolverProfile *m_prof = nullptr;
 };
 
 // 单轮求解：贪心构造 + min-conflicts 局部搜索
@@ -122,6 +189,10 @@ public:
     Schedule bestSchedule() const;
     QualityReport bestReport() const;
 
+    bool profileEnabled() const { return m_profileOn; }
+    SolverProfile &profile() { return m_prof; }
+    const SolverProfile &profile() const { return m_prof; }
+
 private:
     void placeFixed();
     void greedy();
@@ -132,11 +203,15 @@ private:
     double localCost(int s); // s 当前位置参与的 硬*权重+软
     void tryUpdateBest();
 
+    SolverProfile m_prof;
+    bool m_profileOn = false;
     Problem m_p;
     EngineOptions m_opt;
     QRandomGenerator m_rng;
     std::atomic<bool> *m_cancel;
     std::atomic<long> *m_iterCounter;
+    QVector<int> m_movable; // 非固定会话列表；fixed 标记在求解期间不变，只需建一次
+    bool m_movableBuilt = false;
 
     int m_curHard = 0;
     double m_curSoft = 0.0;

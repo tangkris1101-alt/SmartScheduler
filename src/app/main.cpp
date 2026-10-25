@@ -1,5 +1,6 @@
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QGuiApplication>
 #include <QIcon>
@@ -95,8 +96,13 @@ int main(int argc, char *argv[])
     const bool betaSmoke = std::any_of(earlyArgs.cbegin(), earlyArgs.cend(), [](const QString &a) {
         return a == QLatin1String("--smoke=beta");
     });
+    const bool benchSmoke = std::any_of(earlyArgs.cbegin(), earlyArgs.cend(), [](const QString &a) {
+        return a == QLatin1String("--smoke=bench");
+    });
     if (betaSmoke)
         app.setApplicationName(QStringLiteral("SmartSchedulerSmokeBeta"));
+    else if (benchSmoke)
+        app.setApplicationName(QStringLiteral("SmartSchedulerBench")); // 隔离 QSettings / 最近文件
     initLogging(); // 须在设置组织/应用名之后：AppDataLocation 依赖它们
 
     AppController appController;
@@ -1094,6 +1100,121 @@ int main(int argc, char *argv[])
             app.exit(ok ? 0 : 43);
         });
         timer->start(500);
+    }
+
+    // 耗时基准：--smoke=bench --project=<spk> [--runs=8] [--iter=20000] [--seed=1] [--repeat=1]
+    // 打开工程 → runScheduler → 打印每轮分阶段耗时 → 应用结果（不保存）→ 退出。
+    if (smokeIt != args.cend() && smokeIt->mid(8) == QLatin1StringView("bench")) {
+        QString project;
+        int runs = 8;
+        int iterations = 20000;
+        int repeat = 1;
+        quint32 seed = 1;
+        int hardRetries = 2;
+        bool profile = true;
+        for (const auto &a : args) {
+            if (a.startsWith(QStringLiteral("--project=")))
+                project = a.mid(10);
+            else if (a.startsWith(QStringLiteral("--runs=")))
+                runs = std::max(1, a.mid(7).toInt());
+            else if (a.startsWith(QStringLiteral("--iter=")))
+                iterations = std::max(1, a.mid(7).toInt());
+            else if (a.startsWith(QStringLiteral("--repeat=")))
+                repeat = std::max(1, a.mid(9).toInt());
+            else if (a.startsWith(QStringLiteral("--seed=")))
+                seed = a.mid(7).toUInt();
+            else if (a.startsWith(QStringLiteral("--hardRetries=")))
+                hardRetries = std::max(0, a.mid(14).toInt());
+            else if (a == QLatin1String("--noprofile"))
+                profile = false;
+        }
+        if (profile)
+            qputenv("SMARTSCHED_PROFILE", "1");
+
+        struct BenchState {
+            int rep = 0;
+            QElapsedTimer sched;
+            QElapsedTimer total;
+        };
+        auto *st = new BenchState;
+        st->total.start();
+
+        QElapsedTimer openTimer;
+        openTimer.start();
+        if (!appController.openProject(project)) {
+            qWarning("bench: 打开失败 %s", qUtf8Printable(appController.lastError()));
+            return 41;
+        }
+        qWarning("bench: 已打开（%d 班 / %d 计划 / 打开 %lld ms）", appController.classCount(),
+                 appController.planEntryCount(), openTimer.elapsed());
+
+        auto runOnce = [&appController, runs, iterations, seed, st, hardRetries]() {
+            st->sched.start();
+            appController.runScheduler({{QStringLiteral("runs"), runs},
+                                        {QStringLiteral("maxIterations"), iterations},
+                                        {QStringLiteral("seed"), seed},
+                                        {QStringLiteral("randomSeed"), false},
+                                        {QStringLiteral("placeAll"), true},
+                                        {QStringLiteral("hardRetries"), hardRetries}});
+        };
+
+        QObject::connect(
+            &appController, &AppController::schedulerFinished, &app,
+            [&appController, &app, st, repeat, runs, iterations, seed, hardRetries, runOnce]() {
+                const qint64 schedMs = st->sched.elapsed();
+                const QVariantMap rep = appController.schedulerReport();
+                const QVariantList profs = appController.schedulerProfiles();
+                qWarning("bench: 第 %d/%d 次：总 %lld ms（%d 轮 × %d 迭代，hardRetries=%d，seed=%u）",
+                         st->rep + 1, repeat, schedMs, runs, iterations, hardRetries, seed);
+                qWarning("bench: 结果 排上=%d/%d 硬违例=%d 软分=%.2f",
+                         rep.value(QStringLiteral("placedSessions")).toInt(),
+                         rep.value(QStringLiteral("totalSessions")).toInt(),
+                         rep.value(QStringLiteral("hardViolations")).toInt(),
+                         rep.value(QStringLiteral("softScore")).toDouble());
+                for (int i = 0; i < profs.size(); ++i) {
+                    const QVariantMap p = profs[i].toMap();
+                    auto d = [&p](const char *k) {
+                        return p.value(QString::fromLatin1(k)).toDouble();
+                    };
+                    auto n = [&p](const char *k) {
+                        return p.value(QString::fromLatin1(k)).toLongLong();
+                    };
+                    qWarning("bench:   run%d total=%.1f build=%.1f fixed=%.1f greedy=%.1f "
+                             "init=%.1f minConflicts=%.1f restore=%.1f report=%.1f schedule=%.1f",
+                             i + 1, d("totalMs"), d("buildMs"), d("fixedMs"), d("greedyMs"),
+                             d("initEvalMs"), d("minConflictsMs"), d("restoreMs"), d("reportMs"),
+                             d("scheduleMs"));
+                    qWarning("bench:   run%d mc: select=%.1f candidate=%.1f (localSoft=%.1f) "
+                             "hard=%.1f perturb=%.1f snapshot=%.1f | iter=%lld localSoftCalls=%lld "
+                             "hardCalls=%lld attempts=%d",
+                             i + 1, d("selectMs"), d("candidateEvalMs"), d("localSoftMs"),
+                             d("hardViolationMs"), d("perturbMs"), d("snapshotMs"), n("iterations"),
+                             n("localSoftCalls"), n("hardViolationCalls"),
+                             p.value(QStringLiteral("attempts")).toInt());
+                    qWarning("bench:   run%d localSoft: progress=%.1f even=%.1f ampm=%.1f "
+                             "daily=%.1f classSpread=%.1f plan=%.1f",
+                             i + 1, d("localSoftProgressMs"), d("localSoftEvenSpreadMs"),
+                             d("localSoftAmPmMs"), d("localSoftTeacherDailyMs"),
+                             d("localSoftClassSpreadMs"), d("localSoftPlanMs"));
+                }
+                if (++st->rep < repeat) {
+                    runOnce();
+                    return;
+                }
+                QElapsedTimer t;
+                t.start();
+                appController.applyResult();
+                const qint64 applyMs = t.elapsed();
+                t.restart();
+                const QVariantMap q = appController.qualityReport();
+                const qint64 reportMs = t.elapsed();
+                qWarning("bench: 应用结果 %lld ms；质量报告 %lld ms（应用后硬违例=%d）", applyMs,
+                         reportMs, q.value(QStringLiteral("hardViolations")).toInt());
+                qWarning("bench: 总墙钟 %lld ms；未保存，原工程未改动", st->total.elapsed());
+                app.exit(0);
+            });
+
+        runOnce();
     }
 
     // 回归自检：--smoke=toast 同步发一条 Windows 提醒，验证 powershell → WinRT toast 链路

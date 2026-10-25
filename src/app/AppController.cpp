@@ -1871,6 +1871,7 @@ void AppController::runScheduler(const QVariantMap &options)
     opt.seed = options.value(QStringLiteral("seed"), 0).toUInt();
     opt.randomSeed = options.value(QStringLiteral("randomSeed"), true).toBool();
     opt.placeAll = options.value(QStringLiteral("placeAll"), true).toBool();
+    opt.hardRetries = options.value(QStringLiteral("hardRetries"), 2).toInt();
 
     if (m_engine)
         m_engine->deleteLater();
@@ -1906,6 +1907,43 @@ void AppController::runScheduler(const QVariantMap &options)
     Q_EMIT resultPendingChanged();
     Q_EMIT schedulerProgressed();
     m_engine->start();
+}
+
+QVariantList AppController::schedulerProfiles() const
+{
+    QVariantList out;
+    if (!m_engine)
+        return out;
+    for (const sched::SolverProfile &p : m_engine->runProfiles()) {
+        out.append(QVariantMap{
+            {QStringLiteral("totalMs"), p.totalMs},
+            {QStringLiteral("buildMs"), p.buildMs},
+            {QStringLiteral("fixedMs"), p.fixedMs},
+            {QStringLiteral("greedyMs"), p.greedyMs},
+            {QStringLiteral("initEvalMs"), p.initEvalMs},
+            {QStringLiteral("minConflictsMs"), p.minConflictsMs},
+            {QStringLiteral("restoreMs"), p.restoreMs},
+            {QStringLiteral("reportMs"), p.reportMs},
+            {QStringLiteral("scheduleMs"), p.scheduleMs},
+            {QStringLiteral("selectMs"), p.selectMs},
+            {QStringLiteral("candidateEvalMs"), p.candidateEvalMs},
+            {QStringLiteral("localSoftMs"), p.localSoftMs},
+            {QStringLiteral("hardViolationMs"), p.hardViolationMs},
+            {QStringLiteral("perturbMs"), p.perturbMs},
+            {QStringLiteral("snapshotMs"), p.snapshotMs},
+            {QStringLiteral("localSoftProgressMs"), p.localSoftProgressMs},
+            {QStringLiteral("localSoftEvenSpreadMs"), p.localSoftEvenSpreadMs},
+            {QStringLiteral("localSoftAmPmMs"), p.localSoftAmPmMs},
+            {QStringLiteral("localSoftTeacherDailyMs"), p.localSoftTeacherDailyMs},
+            {QStringLiteral("localSoftClassSpreadMs"), p.localSoftClassSpreadMs},
+            {QStringLiteral("localSoftPlanMs"), p.localSoftPlanMs},
+            {QStringLiteral("iterations"), qlonglong(p.iterations)},
+            {QStringLiteral("attempts"), p.attempts},
+            {QStringLiteral("localSoftCalls"), qlonglong(p.localSoftCalls)},
+            {QStringLiteral("hardViolationCalls"), qlonglong(p.hardViolationCalls)},
+        });
+    }
+    return out;
 }
 
 void AppController::cancelScheduler()

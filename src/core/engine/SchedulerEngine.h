@@ -5,6 +5,7 @@
 #include "model/School.h"
 
 #include <QObject>
+#include <QVector>
 
 class QThreadPool;
 class QTimer;
@@ -29,6 +30,8 @@ public:
     void start(); // 异步启动；求解中重复调用无效
     void cancel(); // 请求取消；各轮收敛当前最优后照常发出 finished
     bool isRunning() const { return m_running; }
+    // 最近一次 start() 各轮的耗时明细（仅 SMARTSCHED_PROFILE=1 时有内容）
+    QVector<SolverProfile> runProfiles() const { return m_lastProfiles; }
 
 Q_SIGNALS:
     void progress(int percent, int currentRun, int totalRuns, const sched::QualityReport &current);
@@ -44,6 +47,7 @@ private:
     QThreadPool *m_pool = nullptr;
     QTimer *m_timer = nullptr;
     bool m_running = false;
+    QVector<SolverProfile> m_lastProfiles;
 };
 
 } // namespace sched

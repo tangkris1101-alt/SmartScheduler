@@ -9,10 +9,22 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <atomic>
+#include <chrono>
 
 namespace sched {
 
 namespace engine {
+
+namespace {
+
+using ProfileClock = std::chrono::steady_clock;
+
+inline double profileMs(ProfileClock::time_point t0)
+{
+    return std::chrono::duration<double, std::milli>(ProfileClock::now() - t0).count();
+}
+
+} // namespace
 
 // 线程间共享的运行状态
 struct SharedState {
@@ -22,6 +34,7 @@ struct SharedState {
     long iterationsTotal = 1;
     QMutex resultMutex;
     QVector<QPair<QualityReport, Schedule>> results; // 每轮 (报告, 课表)
+    QVector<SolverProfile> profiles;                 // 与 results 一一对应
 };
 
 class RunTask : public QRunnable
@@ -39,8 +52,26 @@ public:
     {
         Solver solver(m_school, m_options, m_seed, &m_state->cancel, &m_state->iterationsDone);
         solver.run();
+
+        QualityReport report;
+        Schedule schedule;
+        if (solver.profileEnabled()) {
+            auto &prof = solver.profile();
+            auto t = ProfileClock::now();
+            report = solver.bestReport();
+            prof.reportMs += profileMs(t);
+            t = ProfileClock::now();
+            schedule = solver.bestSchedule();
+            prof.scheduleMs += profileMs(t);
+        } else {
+            report = solver.bestReport();
+            schedule = solver.bestSchedule();
+        }
+
         QMutexLocker locker(&m_state->resultMutex);
-        m_state->results.append({solver.bestReport(), solver.bestSchedule()});
+        m_state->results.append({report, schedule});
+        if (solver.profileEnabled())
+            m_state->profiles.append(solver.profile());
         m_state->runsDone.fetch_add(1);
     }
 
@@ -78,6 +109,7 @@ void SchedulerEngine::start()
     if (m_running)
         return;
     m_running = true;
+    m_lastProfiles.clear();
 
     m_state = new engine::SharedState;
     m_state->iterationsTotal = std::max<long>(1, long(m_options.runs) * m_options.maxIterationsPerRun);
@@ -157,6 +189,7 @@ void SchedulerEngine::finalize()
                 first = false;
             }
         }
+        m_lastProfiles = m_state->profiles;
     }
 
     Q_EMIT progress(100, std::max(1, m_options.runs), std::max(1, m_options.runs), bestReport);

@@ -193,6 +193,7 @@ public:
     int schedulerProgress() const { return m_schedulerProgress; }
     QString schedulerRunInfo() const { return m_schedulerRunInfo; }
     QVariantMap schedulerReport() const { return m_schedulerReport; }
+    QVariantList schedulerProfiles() const; // 每轮耗时明细（SMARTSCHED_PROFILE=1 时非空）
     bool resultPending() const { return m_resultPending; }
     bool hasSchedule() const { return !m_school.schedule.assignments.isEmpty(); }
     int assignmentsCount() const { return m_school.schedule.assignments.size(); }
